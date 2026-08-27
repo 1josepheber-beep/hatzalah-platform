@@ -1875,12 +1875,14 @@
         types.forEach(function(t){
           row[t.name + " #"] = "";
           row[t.name + " Exp"] = "";
+          row[t.name + " File"] = "";
         });
         certs.filter(function(c){ return c.user_id === m.user_id; }).forEach(function(c){
           var n = byType[c.cert_type_id];
           if(!n) return;
-          row[n + " #"]   = str(c.credential_number);
-          row[n + " Exp"] = str(c.expires_on);
+          row[n + " #"]    = str(c.credential_number);
+          row[n + " Exp"]  = str(c.expires_on);
+          row[n + " File"] = str(c.file_path);
         });
         return row;
       });
@@ -3244,6 +3246,10 @@
     var cal= st.date? '<button class="cert-cal" data-cal="'+encodeURIComponent(c.name)+'" data-d="'+st.date.getTime()+'">Remind</button>':'';
     var edit = (editable && (c.expKey||c.singleKey)) ? '<button class="cert-edit" data-cert="'+esc(c.name)+'" data-col="'+esc(c.expKey||c.singleKey)+'" data-unit="'+esc(r_(row,"Unit #")||r_(row,"Unit"))+'">Edit date</button>' : '';
     var up = editable ? '<button class="cert-up" data-cert="'+esc(c.name)+'">Upload</button>' : '';
+    var fileKey = c.name + " File";
+    var filePath = String(row[fileKey] || "").trim();
+    var view = filePath
+      ? '<button class="cert-cal js-certview" data-p="'+esc(filePath)+'">View</button>' : '';
     return '<div class="cert-row '+st.k+'"><div class="cert-main"><div class="cert-nm">'+esc(c.name)+'</div>'+
       (num?'<div class="cert-num">#'+esc(num)+'</div>':'')+
       '<div class="cert-st">'+esc(st.label)+'</div></div><div class="cert-btns">'+cal+edit+up+'</div></div>';
@@ -3287,6 +3293,18 @@
     body.innerHTML=html;
   }
   $("certBody").addEventListener("click",function(e){
+    var v=e.target.closest?e.target.closest(".js-certview"):null;
+    if(v){
+      e.stopPropagation();
+      var path=v.getAttribute("data-p");
+      v.disabled=true; v.textContent="Opening\u2026";
+      SB.storage.from("member-docs").createSignedUrl(path, 300).then(function(r){
+        v.disabled=false; v.textContent="View";
+        if(r.error||!r.data){ toast("Could not open that document."); return; }
+        window.open(r.data.signedUrl,"_blank","noopener");
+      }).catch(function(){ v.disabled=false; v.textContent="View"; toast("Could not open it."); });
+      return;
+    }
     if(e.target && e.target.id==="certUploadAll"){ openUpload(""); return; }
     var h=e.target.closest?e.target.closest(".cert-mem-h"):null;
     if(h){ var mem=h.parentNode, key=mem.getAttribute("data-k"); CERT.collapsed[key]=mem.classList.contains("collapsed")?false:true; mem.classList.toggle("collapsed"); return; }

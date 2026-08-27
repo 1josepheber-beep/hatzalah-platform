@@ -67,6 +67,12 @@
   .row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
   .scroller{overflow-x:auto;-webkit-overflow-scrolling:touch}
   table{width:100%;border-collapse:collapse;font-size:14px;min-width:820px}
+  /* A four-column table has no business scrolling sideways. */
+  .scroller.narrow table{min-width:0}
+  .scroller.narrow{overflow-x:visible}
+  /* When a table IS wide, keep it in its own box so the sideways scrollbar
+     is beside the rows instead of at the bottom of the whole page. */
+  .scroller.tall{max-height:70vh;overflow:auto}
   table input{width:100%;min-width:0;padding:8px 9px;border-radius:7px;
     border:1px solid var(--line);font-size:13.5px}
   td.actions{width:1%;white-space:nowrap;text-align:right}
@@ -105,6 +111,10 @@
   .certgrid td.cell{text-align:center;font-size:12.5px;cursor:pointer;white-space:nowrap;
     font-variant-numeric:tabular-nums}
   .scroller.tall{max-height:70vh;overflow:auto}
+  /* a sticky bottom edge means the sideways scrollbar is always in view */
+  .scroller.tall::-webkit-scrollbar{height:12px;width:12px}
+  .scroller.tall::-webkit-scrollbar-thumb{background:#B9C2CF;border-radius:8px}
+  .scroller.tall::-webkit-scrollbar-track{background:#EEF1F5}
   .reqtag{display:block;font-size:10px;font-weight:700;letter-spacing:.04em;
     color:#93151C;margin-top:2px}
   .certgrid td.cell:hover{outline:2px solid var(--brand);outline-offset:-2px}
@@ -449,7 +459,7 @@
         html += '<div class="empty">'
           + (PEOPLE.length ? "Nobody matches that." : "Nobody added yet.") + '</div></div>';
       } else {
-        html += '<div class="scroller"><table><thead><tr>'
+        html += '<div class="scroller tall"><table><thead><tr>'
           + '<th style="width:76px">Unit</th><th>Name</th><th>Contact</th>'
           + '<th style="width:110px">Can do</th><th>Badges</th>'
           + '<th style="width:96px">Duty</th><th style="width:88px">Signed in</th>'
@@ -648,7 +658,7 @@
             + 'certifications are tracked by unit. Give them one on the Details tab first.</div>';
           return;
         }
-        $("pp_body").innerHTML = '<div class="scroller"><table><thead><tr>'
+        $("pp_body").innerHTML = '<div class="scroller tall"><table><thead><tr>'
           + '<th>Certification</th><th style="width:150px">Expires</th>'
           + '<th style="width:160px">Number</th><th style="width:110px">State</th>'
           + '</tr></thead><tbody>'
@@ -662,10 +672,67 @@
                 + '<td><input class="js-pcert" data-t="'+t.id+'" data-f="credential_number" '
                 +   'value="'+esc(h && h.credential_number || "")+'"></td>'
                 + '<td><span class="cellkey '+st.k+'">'
-                +   (st.k === "missing" ? "nothing" : st.k) + '</span></td></tr>';
+                +   (st.k === "missing" ? "nothing" : st.k) + '</span></td>'
+                + '<td class="actions" style="white-space:nowrap">'
+                +   (h && h.file_path
+                        ? '<button class="btn js-pview" data-p="'+esc(h.file_path)+'" '
+                          + 'style="padding:6px 10px;font-size:12.5px">View</button> '
+                        : '')
+                +   '<label class="btn" style="padding:6px 10px;font-size:12.5px;cursor:pointer">'
+                +     (h && h.file_path ? "Replace" : "Attach")
+                +     '<input type="file" class="js-pfile" data-t="'+t.id+'" '
+                +     'accept="image/*,application/pdf" style="display:none"></label>'
+                + '</td></tr>';
             }).join("")
           + '</tbody></table></div>'
           + '<p class="hint" style="margin-top:12px">Changes save when you click out of a box.</p>';
+
+        Array.prototype.forEach.call(scrim.querySelectorAll(".js-pview"), function(b){
+          b.addEventListener("click", function(){
+            db.storage.from("member-docs").createSignedUrl(b.getAttribute("data-p"), 300)
+              .then(function(r){
+                if(r.error || !r.data) return oops(r.error || new Error("Could not open it."));
+                window.open(r.data.signedUrl, "_blank", "noopener");
+              }).catch(oops);
+          });
+        });
+
+        /* Not everyone will send their own document in. An administrator
+           needs to be able to put one on file for them. */
+        Array.prototype.forEach.call(scrim.querySelectorAll(".js-pfile"), function(inp){
+          inp.addEventListener("change", function(e){
+            var f = e.target.files && e.target.files[0];
+            if(!f) return;
+            if(f.size > 10 * 1024 * 1024){ toast("That file is larger than 10 MB."); return; }
+            if(!p.user_id && !p.unit_number){ toast("Give this person a unit first."); return; }
+            var who = p.user_id || ("unit-" + String(p.unit_number).toLowerCase());
+            var clean = f.name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+            var path = orgId + "/certs/" + who + "/" + Date.now().toString(36) + "-" + clean;
+            toast("Uploading\u2026");
+            db.storage.from("member-docs")
+              .upload(path, f, { upsert:true, contentType:f.type || "application/octet-stream" })
+              .then(function(r){
+                if(r.error) throw r.error;
+                return db.from("roster_certifications").upsert({
+                  org_id: orgId, unit_number: p.unit_number,
+                  cert_type_id: inp.getAttribute("data-t"), file_path: path
+                }, { onConflict:"org_id,unit_number,cert_type_id" });
+              })
+              .then(function(r){
+                if(r.error) throw r.error;
+                if(p.user_id){
+                  return db.from("member_certifications").upsert({
+                    org_id: orgId, user_id: p.user_id,
+                    cert_type_id: inp.getAttribute("data-t"),
+                    file_path: path, status: "verified",
+                    verified_at: new Date().toISOString()
+                  }, { onConflict:"org_id,user_id,cert_type_id" });
+                }
+              })
+              .then(function(){ toast("Document attached"); certs(); })
+              .catch(function(err){ oops(err); });
+          });
+        });
 
         Array.prototype.forEach.call(scrim.querySelectorAll(".js-pcert"), function(i){
           i.addEventListener("blur", function(){
@@ -768,7 +835,7 @@
           var disps  = rows.filter(function(x){ return x.is_dispatcher; }).length;
           out.innerHTML = '<div class="warn"><b>'+rows.length+' people.</b><br>'
             + admins+' administrators, '+disps+' dispatchers.</div>'
-            + '<div class="scroller"><table><thead><tr><th>Unit</th><th>Name</th><th>Role</th>'
+            + '<div class="scroller tall"><table><thead><tr><th>Unit</th><th>Name</th><th>Role</th>'
             + '<th>Dispatcher</th><th>Duty</th></tr></thead><tbody>'
             + rows.slice(0,6).map(function(x){
                 return '<tr><td>'+esc(x.unit_number)+'</td><td>'+esc(x.display_name||"\u2014")
@@ -872,7 +939,7 @@
           el.innerHTML = html; wireTiles(); return;
         }
 
-        html += '<div class="scroller"><table><thead><tr>'
+        html += '<div class="scroller tall"><table><thead><tr>'
           + '<th style="width:70px">Order</th><th>Name</th><th>Opens</th><th>Target</th>'
           + '<th>Admin only</th><th>On</th><th></th></tr></thead><tbody>';
 
@@ -1017,7 +1084,7 @@
       + '<br>Highest page referred to: '+maxPage
       + (r.bad ? '<br>'+r.bad+' lines could not be read and will be left out.' : '')
       + '</div>'
-      + '<div class="scroller"><table><thead><tr><th>Heading</th><th>Entry</th><th>Page</th>'
+      + '<div class="scroller tall"><table><thead><tr><th>Heading</th><th>Entry</th><th>Page</th>'
       + '</tr></thead><tbody>'
       + r.rows.slice(0,8).map(function(x){
           return '<tr><td class="small">'+esc(x.volume||"\u2014")+'</td>'
@@ -1137,7 +1204,7 @@
           el.innerHTML = html; wireHospitalForm(); return;
         }
 
-        html += '<div class="scroller"><table><thead><tr><th>Name</th><th>Phone</th><th>Door</th>'
+        html += '<div class="scroller tall"><table><thead><tr><th>Name</th><th>Phone</th><th>Door</th>'
              +  '<th>Address</th><th>Ambulance bay</th><th></th></tr></thead><tbody>';
         rows.forEach(function(h){
           html += '<tr>'
@@ -1324,7 +1391,7 @@
       +   phones+' with a phone number, '+coords+' with ambulance bay coordinates.'
       +   (b.specCols.length ? '<br>Specialties: '+esc(b.specCols.join(", ")) : '')
       +   (b.skipped ? '<br>'+b.skipped+' rows left out.' : '') + '</div>'
-      + '<div class="scroller"><table><thead><tr><th>Name</th><th>Phone</th><th>Door</th>'
+      + '<div class="scroller tall"><table><thead><tr><th>Name</th><th>Phone</th><th>Door</th>'
       +   '<th>Bay coords</th><th>Specialties</th></tr></thead><tbody>'
       + b.rows.slice(0,6).map(function(x){
           return '<tr><td>'+esc(x.name)+'</td><td>'+esc(x.phone_call||"\u2014")+'</td>'
@@ -1404,7 +1471,7 @@
         if(!sets.length){
           html += '<div class="empty">Nothing uploaded yet.</div></div>';
         } else {
-          html += '<div class="scroller"><table><thead><tr><th>Name</th><th>Version</th>'
+          html += '<div class="scroller tall"><table><thead><tr><th>Name</th><th>Version</th>'
                +  '<th>Pages</th><th>Members can see it</th><th></th></tr></thead><tbody>';
           sets.forEach(function(x){
             html += '<tr><td><b>'+esc(x.name)+'</b></td><td>'+esc(x.version||"\u2014")+'</td>'
@@ -1619,7 +1686,7 @@
         +   (pct > 85 ? 'background:#B3121B' : '') + '"></div></div>'
         + '<p class="mono">' + pct + '% used</p>'
         + (rows.length
-            ? '<div class="scroller"><table><thead><tr><th>What</th><th>Files</th>'
+            ? '<div class="scroller tall"><table><thead><tr><th>What</th><th>Files</th>'
               + '<th>Size</th></tr></thead><tbody>'
               + rows.sort(function(a,b){ return b.bytes - a.bytes; }).map(function(x){
                   return '<tr><td>' + esc(x.what) + '</td><td>' + x.files + '</td>'
@@ -2003,8 +2070,13 @@
       +   '<div class="f"><label>Number</label>'
       +     '<input id="cc_num" value="'+esc(td.getAttribute("data-num"))+'"></div>'
       + '</div>'
-      + (file ? '<button id="cc_view" class="btn" style="margin-bottom:10px">View the document</button>'
-              : '<p class="hint">No document on file.</p>')
+      + '<div class="row" style="margin-bottom:12px">'
+      +   (file ? '<button id="cc_view" class="btn">View the document</button>' : '')
+      +   '<label class="btn" style="cursor:pointer">' + (file ? "Replace it" : "Attach a document")
+      +     '<input type="file" id="cc_file" accept="image/*,application/pdf" style="display:none">'
+      +   '</label>'
+      + '</div>'
+      + (file ? '' : '<p class="hint">Nothing on file for this one yet.</p>')
       + (status === "pending"
           ? '<div class="warn">This was changed by the member and is waiting for you.</div>'
             + '<div class="row"><button id="cc_ok" class="btn ok">Approve</button>'
@@ -2036,6 +2108,26 @@
         Object.assign({ org_id:orgId, unit_number:unit, cert_type_id:typeId }, patch),
         { onConflict:"org_id,unit_number,cert_type_id" });
     }
+
+    if($("cc_file")) $("cc_file").addEventListener("change", function(e){
+      var f = e.target.files && e.target.files[0];
+      if(!f) return;
+      if(f.size > 10 * 1024 * 1024){ toast("That file is larger than 10 MB."); return; }
+      var clean = f.name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+      var path = orgId + "/certs/unit-" + String(unit).toLowerCase() + "/"
+               + Date.now().toString(36) + "-" + clean;
+      toast("Uploading\u2026");
+      db.storage.from("member-docs")
+        .upload(path, f, { upsert:true, contentType:f.type || "application/octet-stream" })
+        .then(function(r){
+          if(r.error) throw r.error;
+          return saveRoster({ file_path: path });
+        })
+        .then(function(r){
+          if(r.error) throw r.error;
+          close(); toast("Document attached"); renderCerts();
+        }).catch(oops);
+    });
 
     $("cc_save").addEventListener("click", function(){
       var exp = $("cc_exp").value || null, num = $("cc_num").value.trim() || null;
@@ -2186,7 +2278,7 @@
           el.innerHTML = html; wireContent(); return;
         }
 
-        html += '<div class="scroller"><table><thead><tr>'
+        html += '<div class="scroller tall"><table><thead><tr>'
           + set.cols.map(function(c){
               return '<th'+(c.w?' style="width:'+c.w+'"':'')+'>'+esc(c.l)+'</th>'; }).join("")
           + '<th></th></tr></thead><tbody>';
