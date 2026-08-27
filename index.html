@@ -4115,15 +4115,91 @@
   var VOL_ORDER=["General & Policies","Skills & Procedures","Medical & Trauma","Reference & Pharmacology","Other"];
   function pad3(n){ n=""+n; while(n.length<3) n="0"+n; return n; }
 
-  function loadProtocols(){
-    return new Promise(function(resolve,reject){
-      if(window.HOH_PROTO){ resolve(window.HOH_PROTO); return; }
-      var s=document.createElement("script");
-      s.src="proto_index.js?v=1";
-      s.onload=function(){ window.HOH_PROTO?resolve(window.HOH_PROTO):reject(); };
-      s.onerror=reject;
-      document.head.appendChild(s);
+  /* The protocol book now comes from this organization's own records
+     instead of a file shipped with the app. Same shape as before -
+     { toc:[{name,page,label,vol}], pages:[{n,l,t}] } - so the reader,
+     the search and the contents list below are untouched.
+
+     PROTO_BASE is where the page images live, which is now this
+     organization's storage rather than a folder in the repo. */
+  var PROTO_BASE = "protocols/";
+  var PROTO_SET  = null;
+  var PROTO_URLS = {};      // page number -> signed link
+
+  function signProtocolPages(pages){
+    if(!pages.length) return Promise.resolve();
+    var paths = pages.map(function(p){
+      return ORG.org_id + "/protocols/" + PROTO_SET.id + "/p"
+             + String(p.n).padStart(4, "0") + ".jpg";
     });
+    var chunks = [];
+    for(var i=0;i<paths.length;i+=100) chunks.push(paths.slice(i, i+100));
+
+    return chunks.reduce(function(chain, chunk, ci){
+      return chain.then(function(){
+        return SB.storage.from("org-media").createSignedUrls(chunk, 60*60*8)
+          .then(function(r){
+            (r.data || []).forEach(function(item, idx){
+              if(item && item.signedUrl){
+                PROTO_URLS[pages[ci*100 + idx].n] = item.signedUrl;
+              }
+            });
+          });
+      });
+    }, Promise.resolve());
+  }
+
+  function loadProtocols(){
+    if(window.HOH_PROTO) return Promise.resolve(window.HOH_PROTO);
+    if(!ORG) return Promise.reject();
+
+    return SB.from("protocol_sets")
+      .select("id,name,version,page_count")
+      .eq("org_id", ORG.org_id).eq("is_published", true)
+      .order("created_at", { ascending:false }).limit(1)
+      .then(function(r){
+        if(r.error || !r.data || !r.data.length) throw new Error("no book");
+        PROTO_SET = r.data[0];
+        return Promise.all([
+          SB.from("protocol_pages")
+            .select("page_number,page_label,body_text")
+            .eq("set_id", PROTO_SET.id).order("page_number"),
+          SB.from("protocol_toc")
+            .select("name,volume,page_number,page_label,sort_order")
+            .eq("set_id", PROTO_SET.id).order("sort_order")
+        ]);
+      })
+      .then(function(res){
+        var pages = (res[0].data || []).map(function(p){
+          return { n:p.page_number, l:p.page_label || "", t:p.body_text || "" };
+        });
+        var toc = (res[1].data || []).map(function(t){
+          return { name:t.name, page:t.page_number,
+                   label:t.page_label || "", vol:t.volume || "" };
+        });
+        var data = { toc:toc, pages:pages };
+        window.HOH_PROTO = data;
+        try{
+          localStorage.setItem("hz_proto_" + ORG.org_id, JSON.stringify({ d:data }));
+        }catch(e){}
+        /* The pages are stored privately, so each one needs a signed link.
+           Sign them all now and keep them by page number - the reader sets
+           an image source straight away and cannot wait for a round trip. */
+        return signProtocolPages(pages).then(function(){ return data; });
+      })
+      .catch(function(){
+        // no signal, or nothing published: fall back to the saved copy
+        try{
+          var raw = localStorage.getItem("hz_proto_" + (ORG ? ORG.org_id : ""));
+          if(raw){
+            var c = JSON.parse(raw);
+            PROTO_BASE = c.b || PROTO_BASE;
+            window.HOH_PROTO = c.d;
+            return c.d;
+          }
+        }catch(e){}
+        return { toc:[], pages:[] };
+      });
   }
   function initProto(d){
     if(PROTO.loaded) return;
@@ -4304,10 +4380,17 @@
     }
   },{passive:false});
 
-  var RDR={book:"proto",base:"protocols/",total:0,pos:1};
+  var RDR={book:"proto",base:PROTO_BASE,total:0,pos:1};
+
+  /* The ERG ships with the app as p001.webp in a folder. Protocol pages are
+     uploaded per organization and live in storage behind a signed link. */
+  function pageSrc(n){
+    if(RDR.book === "proto" && PROTO_URLS[n]) return PROTO_URLS[n];
+    return RDR.base + "p" + pad3(n) + ".webp";
+  }
   function setBook(b){
     if(b==="erg"){ RDR.book="erg"; RDR.base="erg/"; RDR.total=(window.HOH_ERG?window.HOH_ERG.pages:392); }
-    else { RDR.book="proto"; RDR.base="protocols/"; RDR.total=PROTO.TOTAL; }
+    else { RDR.book="proto"; RDR.base=PROTO_BASE; RDR.total=PROTO.TOTAL; }
   }
   function openReaderPage(n, book){ setBook(book||"proto"); if(!$("protoReader").classList.contains("open")) navOpen(closeReader); $("protoReader").classList.add("open"); showPage(n); }
   function showPage(n){
@@ -4322,10 +4405,10 @@
       $("prCat").textContent="Page "+pageLabel(n)+"  \u00B7  "+n+" / "+PROTO.TOTAL;
     }
     prImg.onload=function(){ pzReset(); };
-    prImg.src=RDR.base+"p"+pad3(n)+".webp";
+    prImg.src=pageSrc(n);
     if(prHint) prHint.classList.remove("gone");
     $("prPrev").disabled=n<=1; $("prNext").disabled=n>=RDR.total;
-    [n-1,n+1].forEach(function(m){ if(m>=1&&m<=RDR.total){ var im=new Image(); im.src=RDR.base+"p"+pad3(m)+".webp"; } });
+    [n-1,n+1].forEach(function(m){ if(m>=1&&m<=RDR.total){ var im=new Image(); im.src=pageSrc(m); } });
   }
   function closeReader(){ $("protoReader").classList.remove("open"); }
   function zoomBtn(){ if(PZ.scale>PZ.min+0.02) pzReset(); else pzZoomTo(PZ.cw/2,PZ.ch*0.32,2.6); }
