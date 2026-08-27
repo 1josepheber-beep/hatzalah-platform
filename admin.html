@@ -1425,10 +1425,69 @@
       +   '<div class="bar-outer"><div id="md_bar" class="bar-inner"></div></div>'
       +   '<div id="md_status" class="mono">\u2014</div></div>'
       + '<div id="md_out" style="margin-top:12px"></div></div>'
+      + '<div class="card"><h2>Storage</h2>'
+      +   '<div id="md_usage"><div class="empty">Working it out\u2026</div></div></div>'
       + '<div class="card"><h2>Already uploaded</h2><div id="md_list">'
       + '<div class="empty">Loading\u2026</div></div></div>';
     wireMedia();
     listMedia();
+    showUsage();
+  }
+
+  /* How much room is left. Supabase gives 1 GB on the free plan; this adds
+     up what this organization is actually using so you are not guessing. */
+  var FREE_LIMIT_MB = 1024;
+
+  function showUsage(){
+    var box = $("md_usage");
+    if(!box) return;
+
+    var folders = ["apartments","cabinets","tile-icons","media","protocols","certs"];
+    var buckets = [["org-branding", folders], ["org-media", ["protocols","docs"]],
+                   ["member-docs", []]];
+    var total = 0, rows = [];
+
+    function walk(bucket, prefix){
+      return db.storage.from(bucket).list(orgId + (prefix ? "/" + prefix : ""),
+        { limit: 1000 }).then(function(r){
+          var files = (r.data || []).filter(function(f){ return f.name; });
+          var bytes = files.reduce(function(a, f){
+            return a + ((f.metadata && f.metadata.size) || 0);
+          }, 0);
+          if(files.length){
+            total += bytes;
+            rows.push({ what: prefix || bucket, files: files.length, bytes: bytes });
+          }
+        }).catch(function(){});
+    }
+
+    var jobs = [];
+    buckets.forEach(function(b){
+      if(!b[1].length) jobs.push(walk(b[0], ""));
+      else b[1].forEach(function(p){ jobs.push(walk(b[0], p)); });
+    });
+
+    Promise.all(jobs).then(function(){
+      var mb = total / 1048576;
+      var pct = Math.min(100, Math.round(mb / FREE_LIMIT_MB * 100));
+      box.innerHTML =
+        '<p class="hint">This organization is using <b>' + mb.toFixed(1) + ' MB</b> of the '
+        + FREE_LIMIT_MB + ' MB included on the free plan.</p>'
+        + '<div class="bar-outer"><div class="bar-inner" style="width:' + pct + '%;'
+        +   (pct > 85 ? 'background:#B3121B' : '') + '"></div></div>'
+        + '<p class="mono">' + pct + '% used</p>'
+        + (rows.length
+            ? '<div class="scroller"><table><thead><tr><th>What</th><th>Files</th>'
+              + '<th>Size</th></tr></thead><tbody>'
+              + rows.sort(function(a,b){ return b.bytes - a.bytes; }).map(function(x){
+                  return '<tr><td>' + esc(x.what) + '</td><td>' + x.files + '</td>'
+                    + '<td>' + (x.bytes/1048576).toFixed(1) + ' MB</td></tr>';
+                }).join("")
+              + '</tbody></table></div>'
+            : '<p class="hint">Nothing stored yet.</p>')
+        + '<p class="hint">Page images from a protocol book are usually the largest thing here. '
+        + 'Deleting a book you no longer publish frees that space.</p>';
+    });
   }
 
   function wireMedia(){
