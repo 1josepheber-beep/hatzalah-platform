@@ -1548,6 +1548,85 @@
       return Promise.resolve({ error:null });
     }
 
+    if(kind === "aptmarkers"){
+      /* Replace this one complex's pins. The map is the right place to edit
+         them - 1,486 rows in a table would be unusable - so the edit has to
+         land in the database from here. */
+      var slug = String(payload.file || "");
+      return SB.from("complexes")
+        .select("id").eq("org_id", ORG.org_id)
+        .ilike("map_path", "%" + slug + "%").maybeSingle()
+        .then(function(c){
+          if(c.error || !c.data) throw new Error("That complex was not found.");
+          var cid = c.data.id;
+          return SB.from("complex_markers").delete()
+            .eq("org_id", ORG.org_id).eq("complex_id", cid)
+            .then(function(d){
+              if(d.error) throw d.error;
+              var rows = (payload.markers || []).map(function(m){
+                return { org_id: ORG.org_id, complex_id: cid,
+                         label: m.label, x: Number(m.x), y: Number(m.y) };
+              });
+              if(!rows.length) return { error:null };
+              return SB.from("complex_markers").insert(rows);
+            });
+        })
+        .then(function(r){
+          if(r && r.error) throw r.error;
+          APTM.loaded = false;              // reload next time so everyone sees it
+          try{ localStorage.removeItem("hz_tab_" + ORG.org_id + "_Apartment Markers"); }catch(e){}
+          return { error:null };
+        });
+    }
+
+    if(kind === "cert"){
+      /* A member updating one of their own certification expiry dates.
+         The old app wrote a date into a spreadsheet column; here it updates
+         that certificate, and marks it as needing an administrator's eye
+         again because the member changed it themselves. */
+      var mdy = String(payload.value || "").split("/");
+      var iso = mdy.length === 3
+        ? mdy[2] + "-" + ("0"+mdy[0]).slice(-2) + "-" + ("0"+mdy[1]).slice(-2)
+        : null;
+      if(!iso) return Promise.reject(new Error("That date could not be read."));
+
+      return SB.from("certification_types")
+        .select("id").eq("org_id", ORG.org_id).eq("name", payload.cert).maybeSingle()
+        .then(function(t){
+          if(t.error || !t.data) throw new Error("That certification is not set up.");
+          return SB.from("member_certifications").upsert({
+            org_id: ORG.org_id, user_id: STATE.me.userId,
+            cert_type_id: t.data.id, expires_on: iso,
+            status: "pending", submitted_at: new Date().toISOString()
+          }, { onConflict: "org_id,user_id,cert_type_id" });
+        })
+        .then(function(r){
+          if(r.error) throw r.error;
+          // keep the roster copy in step so it survives a re-import
+          return SB.from("roster_certifications").upsert({
+            org_id: ORG.org_id, unit_number: STATE.me.unit,
+            cert_type_id: null, expires_on: iso
+          }, { onConflict: "org_id,unit_number,cert_type_id", ignoreDuplicates: true })
+          .then(function(){ return { error:null }; })
+          .catch(function(){ return { error:null }; });
+        });
+    }
+
+    if(kind === "pw"){
+      /* Passwords are Supabase's job now, not a column in a sheet. The
+         current one is not needed because the person is already signed in. */
+      if(String(payload.newpw || "").length < 8){
+        return Promise.reject(new Error("Use at least 8 characters."));
+      }
+      return SB.auth.updateUser({
+        password: payload.newpw,
+        data: { must_change_password: false }
+      }).then(function(r){
+        if(r.error) throw r.error;
+        return { error:null };
+      });
+    }
+
     if(kind === "codelog"){
       return SB.from("code_logs").upsert({
         org_id: ORG.org_id, user_id: STATE.me.userId,
@@ -3030,7 +3109,6 @@
   }
   function closeAptMap(){ $("aptMapScreen").classList.remove("open"); }
   function saveAptMarkers(slug){
-    var url=getSetting("Profile Update URL",""); if(!url) return;
     var markers=(APTM.by[slug]||[]).map(function(m){ return {label:m.label, x:m.fx, y:m.fy}; });
     sbPost({kind:"aptmarkers",file:slug,markers:markers})
       .then(function(r){ if(r && r.error) throw r.error; return { text: function(){ return Promise.resolve('{"ok":true}'); } }; })
@@ -3240,7 +3318,6 @@
     if(!v){ $("certModalErr").textContent="Pick the new expiration date."; return; }
     if(!CERTUP.col){ $("certModalErr").textContent="This item has no date field to update."; return; }
     var p=v.split("-"), mdy=(+p[1])+"/"+(+p[2])+"/"+p[0];
-    var url=getSetting("Profile Update URL","");
     var btn=$("certModalSave"); btn.disabled=true; btn.textContent="Saving\u2026";
     sbPost({kind:"cert",unit:CERTUP.unit,col:CERTUP.col,value:mdy,cert:CERTUP.cert})
       .then(function(r){ if(r && r.error) throw r.error; return { text: function(){ return Promise.resolve('{"ok":true}'); } }; })
@@ -3385,8 +3462,6 @@
     if(!cur){ note.textContent="Enter your current password."; return; }
     if(np.length<4){ note.textContent="New password must be at least 4 characters."; return; }
     if(np!==np2){ note.textContent="The new passwords don\u2019t match."; return; }
-    var url=getSetting("Profile Update URL","");
-    if(!url){ note.textContent="Saving isn\u2019t set up yet."; return; }
     var btn=$("pwSave"); btn.disabled=true; btn.textContent="Updating\u2026";
     sbPost({kind:"pw",unit:(STATE.me&&STATE.me.unit)||"",cur:cur,newpw:np})
       .then(function(r){ if(r && r.error) throw r.error; return { text: function(){ return Promise.resolve('{"ok":true}'); } }; })
