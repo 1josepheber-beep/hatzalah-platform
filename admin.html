@@ -88,6 +88,23 @@
     padding:10px 12px;border-radius:9px;font-size:13.5px;margin-bottom:13px}
   .empty{text-align:center;color:var(--muted);padding:30px}
   .badgepick{display:flex;flex-wrap:wrap;gap:4px}
+  .certgrid td.cell{text-align:center;font-size:12.5px;cursor:pointer;white-space:nowrap;
+    font-variant-numeric:tabular-nums}
+  .certgrid td.cell:hover{outline:2px solid var(--brand);outline-offset:-2px}
+  .cell.ok{background:#EAF4EC;color:#146030}
+  .cell.soon{background:#FFF3D4;color:#8A6A1A;font-weight:650}
+  .cell.expired{background:#FDECEC;color:#93151C;font-weight:700}
+  .cell.missing{background:#F4F6FA;color:#9AA4B2}
+  .cell.pending{background:#EAF0F9;color:#28456F;font-weight:650}
+  .cellkey{font-size:11.5px;font-weight:650;padding:4px 9px;border-radius:6px}
+  .cellkey.ok{background:#EAF4EC;color:#146030}
+  .cellkey.soon{background:#FFF3D4;color:#8A6A1A}
+  .cellkey.expired{background:#FDECEC;color:#93151C}
+  .cellkey.missing{background:#F4F6FA;color:#9AA4B2}
+  .cellkey.pending{background:#EAF0F9;color:#28456F}
+  .scrim{position:fixed;inset:0;background:rgba(10,16,26,.5);z-index:60;
+    display:flex;align-items:center;justify-content:center;padding:20px}
+  .sheet{background:#fff;border-radius:14px;padding:20px;max-width:520px;width:100%}
   .bchip{font-size:11px;font-weight:650;padding:4px 8px;border-radius:999px;
     border:1px solid var(--line);background:#fff;color:var(--muted);cursor:pointer}
   .bchip.on{background:var(--brand);border-color:var(--brand);color:#fff}
@@ -147,6 +164,7 @@
     <button data-tab="hospitals">Hospitals</button>
     <button data-tab="protocols">Protocols</button>
     <button data-tab="tiles">Home screen</button>
+    <button data-tab="certs">Certifications</button>
     <button data-tab="content">Content</button>
     <button data-tab="media">Images</button>
     <button data-tab="settings">Organization</button>
@@ -157,6 +175,7 @@
     <div id="tab-hospitals" class="hidden"></div>
     <div id="tab-protocols" class="hidden"></div>
     <div id="tab-tiles" class="hidden"></div>
+    <div id="tab-certs" class="hidden"></div>
     <div id="tab-content" class="hidden"></div>
     <div id="tab-media" class="hidden"></div>
     <div id="tab-settings" class="hidden"></div>
@@ -179,7 +198,7 @@
 
   var isSuper = false, orgs = [], orgId = null, org = null;
   var ROSTER_FILTER = "all", ROSTER_SEARCH = "";
-  var TABS = ["members","hospitals","protocols","tiles","content","media","settings","features"];
+  var TABS = ["members","hospitals","protocols","certs","tiles","content","media","settings","features"];
 
   /* Remember where you were. Refreshing in the middle of data entry and
      landing back on the first tab is maddening. */
@@ -316,6 +335,7 @@
     if(tab === "hospitals") renderHospitals();
     if(tab === "protocols") renderProtocols();
     if(tab === "tiles") renderTiles();
+    if(tab === "certs") renderCerts();
     if(tab === "content") renderContent();
     if(tab === "media") renderMedia();
     if(tab === "settings")  renderSettings();
@@ -1539,6 +1559,279 @@
   }
 
 
+  /* ================= CERTIFICATIONS =================
+     One grid: every member down the side, every certification across the
+     top. Colour tells you the state at a glance, and the empty cells are
+     the point - somebody who has submitted nothing is the person you most
+     need to see. */
+
+  var CERT_FILTER = "all", CERT_SEARCH = "";
+
+  function certState(exp, warnDays){
+    if(!exp) return { k:"missing", label:"\u2014" };
+    var d = new Date(exp + "T00:00:00");
+    var days = Math.round((d - new Date()) / 86400000);
+    if(days < 0)  return { k:"expired",  label:exp, days:days };
+    if(days <= (warnDays || 60)) return { k:"soon", label:exp, days:days };
+    return { k:"ok", label:exp, days:days };
+  }
+
+  function renderCerts(){
+    var el = $("tab-certs");
+    el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
+
+    Promise.all([
+      db.from("certification_types")
+        .select("id,name,is_required,warn_days_before,sort_order")
+        .eq("org_id", orgId).eq("is_active", true).order("sort_order"),
+      db.from("roster_slots").select("id,unit_number,display_name,role,status")
+        .eq("org_id", orgId).order("unit_number"),
+      db.from("roster_certifications")
+        .select("id,unit_number,cert_type_id,credential_number,expires_on,file_path")
+        .eq("org_id", orgId),
+      db.from("member_certifications")
+        .select("id,user_id,cert_type_id,credential_number,expires_on,status,file_path,rejected_reason")
+        .eq("org_id", orgId),
+      db.from("memberships").select("user_id,unit_number,display_name").eq("org_id", orgId)
+    ]).then(function(r){
+      if(r[0].error) throw r[0].error;
+      var types = r[0].data || [], roster = r[1].data || [],
+          rcerts = r[2].data || [], mcerts = r[3].data || [], mems = r[4].data || [];
+
+      if(!types.length){
+        el.innerHTML = '<div class="card"><h2>Certifications</h2><div class="empty">'
+          + 'No certifications set up yet. Add them under Content \u2192 Certification types.'
+          + '</div></div>';
+        return;
+      }
+
+      var unitOf = {};
+      mems.forEach(function(m){ if(m.user_id) unitOf[m.user_id] = m.unit_number; });
+
+      // what each unit holds, roster records first, then anything a signed-in
+      // member has submitted since
+      var held = {};
+      rcerts.forEach(function(c){
+        held[(c.unit_number||"").toLowerCase() + "|" + c.cert_type_id] = {
+          expires_on:c.expires_on, credential_number:c.credential_number,
+          file_path:c.file_path, source:"roster", id:c.id
+        };
+      });
+      mcerts.forEach(function(c){
+        var u = (unitOf[c.user_id] || "").toLowerCase();
+        if(!u) return;
+        held[u + "|" + c.cert_type_id] = {
+          expires_on:c.expires_on, credential_number:c.credential_number,
+          file_path:c.file_path, status:c.status, rejected_reason:c.rejected_reason,
+          source:"member", id:c.id
+        };
+      });
+
+      // counts for the filters
+      var counts = { all:0, expired:0, soon:0, missing:0, pending:0 };
+      roster.forEach(function(p){
+        types.forEach(function(t){
+          var h = held[(p.unit_number||"").toLowerCase() + "|" + t.id];
+          counts.all++;
+          if(h && h.status === "pending"){ counts.pending++; return; }
+          var st = certState(h && h.expires_on, t.warn_days_before);
+          if(st.k === "expired") counts.expired++;
+          else if(st.k === "soon") counts.soon++;
+          else if(st.k === "missing" && t.is_required) counts.missing++;
+        });
+      });
+
+      var shown = roster.filter(function(p){
+        if(CERT_SEARCH){
+          var hay = ((p.display_name||"") + " " + (p.unit_number||"")).toLowerCase();
+          if(hay.indexOf(CERT_SEARCH.toLowerCase()) < 0) return false;
+        }
+        if(CERT_FILTER === "all") return true;
+        return types.some(function(t){
+          var h = held[(p.unit_number||"").toLowerCase() + "|" + t.id];
+          if(CERT_FILTER === "pending") return h && h.status === "pending";
+          var st = certState(h && h.expires_on, t.warn_days_before);
+          if(CERT_FILTER === "missing") return st.k === "missing" && t.is_required;
+          return st.k === CERT_FILTER;
+        });
+      });
+
+      var html = '<div class="card" style="padding:14px 16px">'
+        + '<div class="row" style="margin-bottom:10px">'
+        + [["all","Everyone",roster.length],["expired","Expired",counts.expired],
+           ["soon","Expiring soon",counts.soon],["missing","Missing",counts.missing],
+           ["pending","Awaiting review",counts.pending]].map(function(f){
+            return '<button class="btn js-cfilter'+(CERT_FILTER===f[0]?" primary":"")+'" '
+              + 'data-f="'+f[0]+'"'+(f[2]?"":" disabled")+'>'
+              + esc(f[1]) + ' <span class="small">'+f[2]+'</span></button>';
+          }).join("")
+        + '</div><div class="row">'
+        + '<span class="small" style="min-width:52px">Find</span>'
+        + '<input id="csearch" placeholder="Name or unit" value="'+esc(CERT_SEARCH)+'" '
+        + 'style="flex:1;min-width:170px;padding:9px 11px;border-radius:9px;border:1px solid var(--line)">'
+        + '</div></div>';
+
+      if(counts.pending){
+        html += '<div class="warn"><b>'+counts.pending+' waiting for you to check.</b> '
+             +  'A member changed a date or sent in a document.</div>';
+      }
+
+      html += '<div class="card"><h2>Certification grid</h2>'
+        + '<p class="hint">Showing '+shown.length+' of '+roster.length+' people across '
+        + types.length+' certifications. Click a date to change it.</p>'
+        + '<div class="row" style="margin-bottom:12px">'
+        +   '<span class="cellkey ok">in date</span>'
+        +   '<span class="cellkey soon">expiring</span>'
+        +   '<span class="cellkey expired">expired</span>'
+        +   '<span class="cellkey missing">nothing on file</span>'
+        +   '<span class="cellkey pending">awaiting review</span>'
+        + '</div>';
+
+      if(!shown.length){
+        html += '<div class="empty">Nobody matches that.</div></div>';
+        el.innerHTML = html; wireCerts(); return;
+      }
+
+      html += '<div class="scroller"><table class="certgrid"><thead><tr>'
+        + '<th style="min-width:150px">Member</th>'
+        + types.map(function(t){
+            return '<th style="min-width:104px">'+esc(t.name)
+              + (t.is_required ? ' <span class="small">required</span>' : '') + '</th>';
+          }).join("")
+        + '</tr></thead><tbody>';
+
+      shown.forEach(function(p){
+        html += '<tr><td><b>'+esc(p.display_name || "\u2014")+'</b>'
+          + '<div class="small">'+esc(p.unit_number || "")+'</div></td>'
+          + types.map(function(t){
+              var key = (p.unit_number||"").toLowerCase() + "|" + t.id;
+              var h = held[key];
+              var st = (h && h.status === "pending")
+                ? { k:"pending", label:(h.expires_on || "sent in") }
+                : certState(h && h.expires_on, t.warn_days_before);
+              var title = h && h.credential_number ? h.credential_number : "";
+              return '<td class="cell '+st.k+' js-cell" data-unit="'+esc(p.unit_number||"")+'" '
+                + 'data-type="'+t.id+'" data-name="'+esc(t.name)+'" '
+                + 'data-person="'+esc(p.display_name||"")+'" '
+                + 'data-exp="'+esc(h && h.expires_on || "")+'" '
+                + 'data-num="'+esc(h && h.credential_number || "")+'" '
+                + 'data-file="'+esc(h && h.file_path || "")+'" '
+                + 'data-status="'+esc(h && h.status || "")+'" '
+                + 'data-mid="'+esc(h && h.source === "member" ? h.id : "")+'" '
+                + (title ? 'title="'+esc(title)+'"' : '') + '>'
+                + esc(st.label) + '</td>';
+            }).join("")
+          + '</tr>';
+      });
+      html += '</tbody></table></div></div>';
+
+      el.innerHTML = html;
+      wireCerts();
+    }).catch(function(e){
+      el.innerHTML = '<div class="card"><div class="err">'
+        + esc(e.message || "Could not load certifications") + '</div></div>';
+    });
+  }
+
+  function wireCerts(){
+    Array.prototype.forEach.call(document.querySelectorAll(".js-cfilter"), function(b){
+      b.addEventListener("click", function(){
+        CERT_FILTER = b.getAttribute("data-f"); renderCerts();
+      });
+    });
+    var cs = $("csearch");
+    if(cs) cs.addEventListener("input", function(){
+      clearTimeout(window.__cst);
+      window.__cst = setTimeout(function(){
+        CERT_SEARCH = cs.value; renderCerts();
+        var again = $("csearch");
+        if(again){ again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+      }, 260);
+    });
+  }
+
+  function openCertCell(td){
+    var unit = td.getAttribute("data-unit"), typeId = td.getAttribute("data-type");
+    var file = td.getAttribute("data-file"), status = td.getAttribute("data-status");
+    var mid  = td.getAttribute("data-mid");
+
+    var body = '<h2>'+esc(td.getAttribute("data-name"))+'</h2>'
+      + '<p class="hint">'+esc(td.getAttribute("data-person"))+' \u00B7 '+esc(unit)+'</p>'
+      + '<div class="grid2">'
+      +   '<div class="f"><label>Expires</label>'
+      +     '<input id="cc_exp" type="date" value="'+esc(td.getAttribute("data-exp"))+'"></div>'
+      +   '<div class="f"><label>Number</label>'
+      +     '<input id="cc_num" value="'+esc(td.getAttribute("data-num"))+'"></div>'
+      + '</div>'
+      + (file ? '<button id="cc_view" class="btn" style="margin-bottom:10px">View the document</button>'
+              : '<p class="hint">No document on file.</p>')
+      + (status === "pending"
+          ? '<div class="warn">This was changed by the member and is waiting for you.</div>'
+            + '<div class="row"><button id="cc_ok" class="btn ok">Approve</button>'
+            + '<button id="cc_no" class="btn danger">Reject</button></div>'
+          : '')
+      + '<div class="row" style="margin-top:14px">'
+      +   '<button id="cc_save" class="btn primary">Save</button>'
+      +   '<button id="cc_clear" class="btn danger">Clear this one</button>'
+      +   '<button id="cc_cancel" class="btn">Cancel</button></div>';
+
+    var scrim = document.createElement("div");
+    scrim.className = "scrim"; scrim.id = "certScrim";
+    scrim.innerHTML = '<div class="sheet">' + body + '</div>';
+    document.body.appendChild(scrim);
+
+    function close(){ scrim.remove(); }
+    scrim.addEventListener("click", function(e){ if(e.target === scrim) close(); });
+    $("cc_cancel").addEventListener("click", close);
+
+    if($("cc_view")) $("cc_view").addEventListener("click", function(){
+      db.storage.from("member-docs").createSignedUrl(file, 300).then(function(r){
+        if(r.error || !r.data) return oops(r.error || new Error("Could not open it."));
+        window.open(r.data.signedUrl, "_blank", "noopener");
+      }).catch(oops);
+    });
+
+    function saveRoster(patch){
+      return db.from("roster_certifications").upsert(
+        Object.assign({ org_id:orgId, unit_number:unit, cert_type_id:typeId }, patch),
+        { onConflict:"org_id,unit_number,cert_type_id" });
+    }
+
+    $("cc_save").addEventListener("click", function(){
+      var exp = $("cc_exp").value || null, num = $("cc_num").value.trim() || null;
+      saveRoster({ expires_on:exp, credential_number:num }).then(function(r){
+        if(r.error) throw r.error;
+        if(mid){
+          return db.from("member_certifications")
+            .update({ expires_on:exp, credential_number:num, status:"verified",
+                      verified_at:new Date().toISOString() }).eq("id", mid);
+        }
+      }).then(function(){ close(); toast("Saved"); renderCerts(); }).catch(oops);
+    });
+
+    $("cc_clear").addEventListener("click", function(){
+      if(!confirm("Remove this certification record?")) return;
+      db.from("roster_certifications").delete()
+        .eq("org_id", orgId).eq("unit_number", unit).eq("cert_type_id", typeId)
+        .then(function(){
+          if(mid) return db.from("member_certifications").delete().eq("id", mid);
+        }).then(function(){ close(); toast("Removed"); renderCerts(); }).catch(oops);
+    });
+
+    if($("cc_ok")) $("cc_ok").addEventListener("click", function(){
+      db.rpc("review_certification", { p_cert:mid, p_approve:true })
+        .then(function(r){ if(r.error) return oops(r.error);
+                           close(); toast("Approved"); renderCerts(); }).catch(oops);
+    });
+    if($("cc_no")) $("cc_no").addEventListener("click", function(){
+      var why = prompt("Why are you rejecting it? The member will see this.");
+      if(why === null) return;
+      db.rpc("review_certification", { p_cert:mid, p_approve:false, p_reason:why })
+        .then(function(r){ if(r.error) return oops(r.error);
+                           close(); toast("Rejected"); renderCerts(); }).catch(oops);
+    });
+  }
+
   /* ================= CONTENT ================= */
 
   var CONTENT_SETS = {
@@ -1602,6 +1895,21 @@
         { f:"is_active",  l:"On",     w:"56px", bool:true }
       ],
       blank: { action:"log", is_active:true, sort_order:999 }
+    },
+    certtypes: {
+      table: "certification_types", label: "Certification types",
+      hint: "What this organization tracks. Required ones show as missing when nobody has submitted them.",
+      order: "sort_order",
+      cols: [
+        { f:"sort_order",       l:"#",        w:"56px", num:true },
+        { f:"name",             l:"Name" },
+        { f:"issuing_body",     l:"Issued by" },
+        { f:"validity_months",  l:"Valid for (months)", w:"140px", num:true },
+        { f:"warn_days_before", l:"Warn (days)", w:"110px", num:true },
+        { f:"is_required",      l:"Required", w:"80px", bool:true },
+        { f:"is_active",        l:"On",       w:"56px", bool:true }
+      ],
+      blank: { is_required:false, is_active:true, warn_days_before:60, sort_order:999 }
     },
     badges: {
       table: "badge_types", label: "Badges",
@@ -1848,6 +2156,9 @@
         .then(function(r){ if(r.error) return oops(r.error); toast("Suspended"); renderMembers(); });
       return;
     }
+    var cell = t.closest(".js-cell");
+    if(cell){ openCertCell(cell); return; }
+
     var bc = t.closest(".js-badge");
     if(bc){
       var bid = bc.getAttribute("data-id"), bname = bc.getAttribute("data-b");
