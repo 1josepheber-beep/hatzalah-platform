@@ -3682,6 +3682,65 @@
     paintBrandPreview();
   }
 
+  /* ---------- the platform team ----------
+     Everyone here can see and change every organization, so it is only
+     visible to a super-admin and every change is written to the audit log. */
+  function renderPlatformTeam(){
+    var box = $("platformTeam");
+    if(!box) return;
+    db.from("v_super_admins").select("*").then(function(r){
+      var rows = (r.data || []);
+      box.innerHTML = '<h2>Platform team</h2>'
+        + '<p class="hint">Anyone here can see and change <b>every</b> organization, including '
+        + 'their people and documents. Appoint sparingly.</p>'
+        + (rows.length
+            ? '<div class="scroller narrow"><table><thead><tr><th>Email</th>'
+              + '<th style="width:120px">Organizations</th><th style="width:110px"></th>'
+              + '</tr></thead><tbody>'
+              + rows.map(function(x){
+                  return '<tr><td>'+esc(x.email||"")+'</td>'
+                    + '<td>'+(x.organizations||0)+'</td>'
+                    + '<td class="actions"><button class="btn danger js-unsuper" '
+                    + 'data-e="'+esc(x.email||"")+'" style="padding:6px 10px;font-size:12.5px">'
+                    + 'Remove</button></td></tr>';
+                }).join("")
+              + '</tbody></table></div>'
+            : '<div class="empty">Nobody yet.</div>')
+        + '<div class="row" style="margin-top:14px">'
+        +   '<input id="sa_email" placeholder="Their email address" '
+        +   'style="flex:1;min-width:200px;padding:10px 11px;border-radius:9px;'
+        +   'border:1px solid var(--line)">'
+        +   '<button id="sa_add" class="btn primary">Make them a super-admin</button>'
+        + '</div>'
+        + '<p class="hint">They need a login already. Create it under Authentication in '
+        + 'Supabase first, then add the same address here.</p>';
+
+      $("sa_add").addEventListener("click", function(){
+        var em = $("sa_email").value.trim().toLowerCase();
+        if(!em || em.indexOf("@") < 1){ toast("Enter their email address."); return; }
+        if(!confirm("Give " + em + " access to every organization?")) return;
+        db.rpc("set_super_admin", { p_email: em, p_on: true }).then(function(r){
+          if(r.error) return oops(r.error);
+          toast("Added"); renderPlatformTeam();
+        }).catch(oops);
+      });
+
+      Array.prototype.forEach.call(box.querySelectorAll(".js-unsuper"), function(b){
+        b.addEventListener("click", function(){
+          var em = b.getAttribute("data-e");
+          if(!confirm("Remove platform access from " + em + "?")) return;
+          db.rpc("set_super_admin", { p_email: em, p_on: false }).then(function(r){
+            if(r.error) return oops(r.error);
+            toast("Removed"); renderPlatformTeam();
+          }).catch(oops);
+        });
+      });
+    }).catch(function(e){
+      box.innerHTML = '<h2>Platform team</h2><div class="err">'
+        + esc(e.message || "Could not load") + '</div>';
+    });
+  }
+
   /* ================= FEATURES ================= */
   function renderFeatures(){
     var el = $("tab-features");
@@ -3707,7 +3766,10 @@
              +  (state[f.key]?"true":"false")+'"'+(isSuper?"":" disabled")+'><span></span></button></div>';
       });
       html += '</div>';
+      if(isSuper) html += '<div class="card" id="platformTeam">'
+        + '<div class="empty">Loading\u2026</div></div>';
       el.innerHTML = html;
+      if(isSuper) renderPlatformTeam();
     }).catch(function(e){
       el.innerHTML = '<div class="card"><div class="err">'+esc(e.message||"Could not load features")+'</div></div>';
     });
