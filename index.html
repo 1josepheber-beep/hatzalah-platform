@@ -1342,7 +1342,7 @@
   /* build STATE.me from the roster, in the shape the app already expects */
   function sbLoadMe(){
     return SB.from("memberships")
-      .select("user_id,unit_number,display_name,role,status,duty_status,cert_level")
+      .select("user_id,unit_number,display_name,role,status,duty_status,cert_level,is_dispatcher")
       .eq("org_id", ORG.org_id).maybeSingle()
       .then(function(r){
         var m = r.data;
@@ -1356,7 +1356,7 @@
           last: parts.length > 1 ? parts.slice(1).join(" ") : "",
           unit: m.unit_number || "",
           admin: m.role === "admin",
-          dispatcher: (m.role === "dispatcher" || m.role === "admin"),
+          dispatcher: !!m.is_dispatcher,
           status: m.duty_status || "",
           level: m.cert_level || "",
           userId: m.user_id,
@@ -1606,8 +1606,8 @@
           return {
             "Order": str(t.sort_order),
             "Label": str(t.label),
-            "Type":  t.kind === "app" ? "app" : (t.kind === "phone" ? "phone" : "link"),
-            "Target": str(t.target).replace(/^\//, ""),
+            "Type":  str(t.kind),
+            "Target": str(t.target),
             "Admin Only": xs(t.min_role === "admin"),
             "Icon": str(t.icon),
             "Image": str(t.image_path),
@@ -1619,7 +1619,7 @@
 
   function tabMembers(){
     return SB.from("memberships")
-      .select("unit_number,display_name,role,status,duty_status,cert_level,user_id")
+      .select("unit_number,display_name,role,status,duty_status,cert_level,is_dispatcher,user_id")
       .eq("org_id", orgId()).then(function(r){
         return (r.data || []).map(function(m){
           var parts = str(m.display_name).split(" ");
@@ -1630,7 +1630,7 @@
             "Password": "",
             "Admin": xs(m.role === "admin"),
             "Active": xs(m.status === "active"),
-            "Dispatcher": xs(m.role === "dispatcher" || m.role === "admin"),
+            "Dispatcher": xs(m.is_dispatcher),
             "Status": str(m.duty_status)
           };
         });
