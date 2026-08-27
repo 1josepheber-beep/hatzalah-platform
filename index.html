@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#143D75">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Hatzalah</title>
+<style>
+  :root{
+    --brand:#143D75; --brand-deep:#0D2A52; --on-brand:#fff;
+    --ink:#12161C; --muted:#5C6675; --line:#DFE4EC; --bg:#F2F4F8; --card:#fff;
+    --red:#B3121B; --green:#1B7F3B;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0;height:100%}
+  body{background:var(--bg);color:var(--ink);
+    font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    padding-bottom:env(safe-area-inset-bottom)}
+  .hidden{display:none !important}
+  button{font:inherit;cursor:pointer}
+  :focus-visible{outline:2px solid #7FA8E0;outline-offset:2px}
+
+  /* ---------- entry screens (org code + sign in) ---------- */
+  .entry{min-height:100dvh;display:flex;flex-direction:column;justify-content:center;
+    padding:32px 22px;background:var(--brand);color:var(--on-brand)}
+  .logo{width:64px;height:64px;border-radius:16px;object-fit:contain;background:#fff;
+    padding:7px;margin:0 0 18px}
+  .entry h1{font-size:25px;margin:0 0 4px;font-weight:650;letter-spacing:-.015em}
+  .entry .sub{margin:0 0 26px;opacity:.72;font-size:15px}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:13px;opacity:.75;margin-bottom:6px}
+  .field input{width:100%;padding:14px;border-radius:11px;border:1px solid rgba(255,255,255,.22);
+    background:rgba(0,0,0,.22);color:#fff;font-size:16px}
+  .field input::placeholder{color:rgba(255,255,255,.45)}
+  .primary{width:100%;padding:15px;border:0;border-radius:11px;background:#fff;
+    color:var(--brand);font-weight:650;font-size:16px}
+  .primary:disabled{opacity:.55}
+  .linkbtn{background:none;border:0;color:rgba(255,255,255,.8);font-size:14px;
+    text-decoration:underline;padding:14px 0 0;width:100%}
+  .err{background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.3);color:#FFDDDF;
+    padding:11px 13px;border-radius:9px;font-size:14px;margin-bottom:14px}
+  .ver{position:absolute;bottom:14px;left:0;right:0;text-align:center;
+    font-size:12px;opacity:.45}
+
+  /* ---------- app chrome ---------- */
+  header{position:sticky;top:0;z-index:30;background:var(--brand);color:var(--on-brand);
+    padding:calc(9px + env(safe-area-inset-top)) 12px 9px}
+  .bar{display:flex;align-items:center;gap:9px;min-height:34px}
+  .bar h1{font-size:17px;margin:0;font-weight:600;flex:1;min-width:0;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .icobtn{background:rgba(255,255,255,.13);border:0;color:inherit;width:34px;height:34px;
+    border-radius:9px;display:flex;align-items:center;justify-content:center;flex:none}
+  .icobtn svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:2;
+    stroke-linecap:round;stroke-linejoin:round}
+  .unit{font-size:12px;opacity:.72;padding:2px 8px;border-radius:6px;
+    background:rgba(255,255,255,.13);font-variant-numeric:tabular-nums}
+  .searchwrap{padding-top:9px}
+  .searchwrap input{width:100%;padding:12px 14px;border-radius:10px;
+    border:1px solid rgba(255,255,255,.2);background:rgba(0,0,0,.22);color:#fff;font-size:16px}
+  .searchwrap input::placeholder{color:rgba(255,255,255,.45)}
+
+  .banner{padding:9px 14px;font-size:13px;text-align:center;background:#7A4A06;color:#FFE6BE}
+  main{padding:14px 12px 30px}
+
+  /* ---------- home ---------- */
+  .callrow{display:flex;gap:9px;margin-bottom:14px}
+  .callbtn{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;
+    padding:12px 8px;border-radius:13px;border:1px solid var(--line);background:var(--card);
+    color:var(--brand);font-weight:650;font-size:14px}
+  .callbtn small{font-weight:500;font-size:11.5px;color:var(--muted);
+    text-transform:uppercase;letter-spacing:.05em}
+  .tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+  .tile{display:flex;flex-direction:column;align-items:flex-start;gap:9px;
+    padding:15px 13px;border-radius:14px;border:1px solid var(--line);
+    background:var(--card);text-align:left;min-height:104px;justify-content:space-between}
+  .tile .ti{width:34px;height:34px;border-radius:9px;background:var(--brand);
+    display:flex;align-items:center;justify-content:center}
+  .tile .ti svg{width:19px;height:19px;fill:none;stroke:#fff;stroke-width:2;
+    stroke-linecap:round;stroke-linejoin:round}
+  .tile b{font-size:15px;font-weight:600;line-height:1.25}
+  .tile.soon{opacity:.5}
+  .tile .soonlab{font-size:11px;color:var(--muted);font-weight:500}
+
+  /* ---------- hospitals ---------- */
+  .count{color:var(--muted);font-size:13px;padding:2px 4px 10px}
+  .chips{display:flex;gap:7px;overflow-x:auto;padding:10px 12px;
+    background:var(--brand-deep);scrollbar-width:none}
+  .chips::-webkit-scrollbar{display:none}
+  .chip{white-space:nowrap;padding:7px 12px;border-radius:999px;
+    border:1px solid rgba(255,255,255,.25);background:transparent;
+    color:rgba(255,255,255,.85);font-size:13px}
+  .chip[aria-pressed="true"]{background:#fff;color:var(--brand);border-color:#fff;font-weight:600}
+  .hcard{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    margin-bottom:10px;overflow:hidden}
+  .hcard-top{display:flex;align-items:center;gap:10px;padding:13px;width:100%;
+    background:none;border:0;text-align:left}
+  .nm{flex:1;min-width:0}
+  .nm b{display:block;font-size:16px;font-weight:600;line-height:1.28}
+  .tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+  .tag{font-size:11.5px;padding:3px 8px;border-radius:5px;background:#EAF0F9;color:#28456F}
+  .tag.tr{background:#FCE9EA;color:#93151C}
+  .tag.pe{background:#EAF4EC;color:#146030}
+  .chev{width:20px;height:20px;flex:none;fill:none;stroke:#93A0B2;stroke-width:2;
+    stroke-linecap:round;transition:transform .18s ease}
+  .hcard.open .chev{transform:rotate(180deg)}
+  .hcard-body{display:none;padding:0 13px 13px}
+  .hcard.open .hcard-body{display:block}
+  .hrow{display:flex;gap:8px;margin-bottom:8px}
+  .hbtn{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;
+    padding:12px 8px;border-radius:10px;font-size:14.5px;font-weight:600;
+    border:1px solid var(--line);background:#F7F9FC;color:var(--brand)}
+  .hbtn svg{width:17px;height:17px;fill:currentColor}
+  .hbtn.red{background:#FDECEC;border-color:#F0BEC0;color:var(--red)}
+  .hbtn.nav{background:#EAF4EC;border-color:#B9DCC4;color:var(--green)}
+  .hmeta{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px;font-size:14.5px}
+  .hmeta > div{min-width:0;word-break:break-word}
+  .hmeta .k{font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--muted);font-weight:650}
+  .hmore{margin-top:11px;background:none;border:0;color:var(--brand);font-size:13.5px;
+    font-weight:600;padding:4px 0;text-decoration:underline}
+  .missing{margin-top:10px;color:#98A2B3;font-size:13px}
+  .empty{text-align:center;color:var(--muted);padding:44px 20px}
+
+  /* ---------- sheet ---------- */
+  .scrim{position:fixed;inset:0;background:rgba(10,16,26,.5);z-index:40;
+    display:flex;align-items:flex-end}
+  .sheet{background:#fff;width:100%;border-radius:18px 18px 0 0;padding:18px 18px
+    calc(18px + env(safe-area-inset-bottom))}
+  .sheet h2{margin:0 0 4px;font-size:17px}
+  .sheet p{margin:0 0 16px;color:var(--muted);font-size:14px}
+  .sheet button{width:100%;padding:13px;border-radius:11px;font-size:15px;
+    border:1px solid var(--line);background:#F7F9FC;color:var(--ink);
+    margin-bottom:8px;font-weight:600}
+  .sheet button.danger{color:var(--red);border-color:#F0BEC0;background:#FDECEC}
+</style>
+</head>
+<body>
+
+<!-- =============== 1. ORGANIZATION CODE =============== -->
+<section id="orgScreen" class="entry">
+  <h1>Hatzalah</h1>
+  <p class="sub">Enter your organization code to continue</p>
+  <div id="orgErr" class="err hidden"></div>
+  <div class="field">
+    <label for="orgCode">Organization code</label>
+    <input id="orgCode" type="text" autocapitalize="none" autocorrect="off"
+           spellcheck="false" placeholder="houston">
+  </div>
+  <button id="orgBtn" class="primary">Continue</button>
+</section>
+
+<!-- =============== 2. SIGN IN (branded) =============== -->
+<section id="loginScreen" class="entry hidden">
+  <img id="loginLogo" class="logo hidden" alt="">
+  <h1 id="loginTitle">—</h1>
+  <p class="sub" id="loginSub">Secure member sign-in</p>
+  <div id="loginErr" class="err hidden"></div>
+  <div class="field">
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" inputmode="email">
+  </div>
+  <div class="field">
+    <label for="pw">Password</label>
+    <input id="pw" type="password" autocomplete="current-password">
+  </div>
+  <button id="loginBtn" class="primary">Sign in</button>
+  <button id="changeOrg1" class="linkbtn">Change organization</button>
+  <div id="domainHint" class="ver hidden"></div>
+</section>
+
+<!-- =============== 3. THE APP =============== -->
+<div id="app" class="hidden">
+  <header>
+    <div class="bar">
+      <button id="backBtn" class="icobtn hidden" aria-label="Back">
+        <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <h1 id="screenTitle">—</h1>
+      <span id="unitBadge" class="unit hidden"></span>
+      <button id="menuBtn" class="icobtn" aria-label="Menu">
+        <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+    </div>
+    <div id="searchWrap" class="searchwrap hidden">
+      <input id="search" type="search" placeholder="Search hospitals" autocomplete="off">
+    </div>
+  </header>
+
+  <div id="chips" class="chips hidden"></div>
+  <div id="offline" class="banner hidden">Offline — showing the copy saved on this phone</div>
+
+  <main>
+    <!-- home -->
+    <section id="homeScreen">
+      <div id="callRow" class="callrow"></div>
+      <div id="tiles" class="tiles"></div>
+    </section>
+    <!-- hospitals -->
+    <section id="hospScreen" class="hidden">
+      <div id="count" class="count"></div>
+      <div id="list"></div>
+    </section>
+  </main>
+</div>
+
+<div id="menuScrim" class="scrim hidden">
+  <div class="sheet">
+    <h2 id="menuOrg">—</h2>
+    <p id="menuWho">—</p>
+    <button id="changeOrg2">Change organization</button>
+    <button id="signout" class="danger">Sign out of this device</button>
+    <button id="menuClose">Cancel</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  var SUPABASE_URL = "https://fwjxskdgzzfgqhnabrpa.supabase.co";
+  var SUPABASE_KEY = "sb_publishable_vbsCkIpZsk7bh-PjbhIYSw__t9MtXJi";
+  var VERSION      = "3.0";
+
+  var db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  var $  = function(id){ return document.getElementById(id); };
+
+  /* which tiles actually have a screen built. Everything else shows
+     "Coming soon" rather than pretending to work. */
+  var BUILT = { "/hospitals": true };
+
+  var ICONS = {
+    hospital:'<path d="M12 6v12M6 12h12"/><rect x="3" y="3" width="18" height="18" rx="3"/>',
+    book:'<path d="M4 5a2 2 0 012-2h13v18H6a2 2 0 01-2-2z"/><path d="M9 7h7M9 11h7"/>',
+    users:'<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0112 0"/><path d="M16 6a3 3 0 010 6M17 20a6 6 0 00-1.5-4"/>',
+    badge:'<circle cx="12" cy="9" r="4"/><path d="M8 13l-2 8 6-3 6 3-2-8"/>',
+    box:'<path d="M3 8l9-5 9 5-9 5-9-5z"/><path d="M3 8v8l9 5 9-5V8"/>',
+    map:'<path d="M9 4L3 7v13l6-3 6 3 6-3V4l-6 3-6-3z"/>',
+    clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    heart:'<path d="M12 20s-7-4.6-7-9.5A3.9 3.9 0 0112 8a3.9 3.9 0 017 2.5C19 15.4 12 20 12 20z"/>',
+    file:'<path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/>',
+    link:'<path d="M10 13a5 5 0 007 0l2-2a5 5 0 00-7-7l-1 1"/><path d="M14 11a5 5 0 00-7 0l-2 2a5 5 0 007 7l1-1"/>',
+    phone:'<path d="M22 16.9v3a2 2 0 01-2.2 2 19.8 19.8 0 01-8.6-3 19.5 19.5 0 01-6-6 19.8 19.8 0 01-3-8.6A2 2 0 014.1 2h3a2 2 0 012 1.7 12 12 0 00.7 2.6 2 2 0 01-.5 2.1L8.1 9.9a16 16 0 006 6l1.5-1.2a2 2 0 012.1-.5 12 12 0 002.6.7 2 2 0 011.7 2z"/>'
+  };
+  var ICON_CALL = '<svg viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 01-2.2 2 19.8 19.8 0 01-8.6-3 19.5 19.5 0 01-6-6 19.8 19.8 0 01-3-8.6A2 2 0 014.1 2h3a2 2 0 012 1.7c.1.9.4 1.8.7 2.6a2 2 0 01-.5 2.1L8.1 9.9a16 16 0 006 6l1.5-1.2a2 2 0 012.1-.5c.8.3 1.7.6 2.6.7a2 2 0 011.7 2z"/></svg>';
+  var ICON_NAV  = '<svg viewBox="0 0 24 24"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg>';
+
+  var org = null, me = null, tiles = [], features = {},
+      hospitals = [], specs = [], filters = {}, fromCache = false, screen = "home";
+
+  /* ---------- storage, always guarded ---------- */
+  function put(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+  function get(k){ try{ return JSON.parse(localStorage.getItem(k)); }catch(e){ return null; } }
+  function del(k){ try{ localStorage.removeItem(k); }catch(e){} }
+
+  function esc(s){
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+  function dial(n){ location.href = "tel:" + String(n).replace(/[^0-9+*#,]/g,""); }
+  function show(el,on){ el.classList.toggle("hidden", !on); }
+  function fail(el,msg){ el.textContent = msg; el.classList.remove("hidden"); }
+
+  function paintBrand(){
+    if(!org) return;
+    var b = org.brand_primary || "#143D75";
+    document.documentElement.style.setProperty("--brand", b);
+    document.documentElement.style.setProperty("--on-brand", org.brand_on_primary || "#fff");
+    var m = document.querySelector('meta[name="theme-color"]');
+    if(m) m.setAttribute("content", b);
+  }
+
+  /* =============== 1. organization code =============== */
+  function lookupOrg(code){
+    var btn = $("orgBtn");
+    btn.disabled = true; btn.textContent = "Checking\u2026";
+    $("orgErr").classList.add("hidden");
+
+    db.rpc("org_login_info", { p_code: code }).then(function(r){
+      btn.disabled = false; btn.textContent = "Continue";
+      var row = r.data && r.data.length ? r.data[0] : null;
+      if(r.error || !row){
+        fail($("orgErr"), "That organization code was not recognised.");
+        return;
+      }
+      org = row;
+      put("hz_org_code", row.code);
+      put("hz_org", row);
+      paintBrand();
+      goLogin();
+    }).catch(function(){
+      btn.disabled = false; btn.textContent = "Continue";
+      var saved = get("hz_org");
+      if(saved){ org = saved; paintBrand(); goLogin(); return; }
+      fail($("orgErr"), "No connection. Try again when you have signal.");
+    });
+  }
+
+  $("orgBtn").addEventListener("click", function(){
+    var v = $("orgCode").value.trim().toLowerCase();
+    if(!v){ fail($("orgErr"), "Enter your organization code."); return; }
+    lookupOrg(v);
+  });
+  $("orgCode").addEventListener("keydown", function(e){
+    if(e.key === "Enter") $("orgBtn").click();
+  });
+
+  /* =============== 2. sign in =============== */
+  function goLogin(){
+    show($("orgScreen"), false);
+    show($("app"), false);
+    show($("loginScreen"), true);
+    $("loginTitle").textContent = org.name;
+    $("loginSub").textContent   = org.login_subtext || "Secure member sign-in";
+    if(org.logo_path){ $("loginLogo").src = org.logo_path; show($("loginLogo"), true); }
+    var d = (org.email_domains || [])[0];
+    if(d){
+      $("domainHint").textContent = "Use your @" + d + " account";
+      show($("domainHint"), true);
+    }
+  }
+
+  $("loginBtn").addEventListener("click", function(){
+    var btn = $("loginBtn");
+    $("loginErr").classList.add("hidden");
+    btn.disabled = true; btn.textContent = "Signing in\u2026";
+    db.auth.signInWithPassword({ email: $("email").value.trim(), password: $("pw").value })
+      .then(function(r){
+        btn.disabled = false; btn.textContent = "Sign in";
+        if(r.error){ fail($("loginErr"), r.error.message); return; }
+        boot();
+      })
+      .catch(function(){
+        btn.disabled = false; btn.textContent = "Sign in";
+        fail($("loginErr"), "Could not reach the server. Check your connection.");
+      });
+  });
+  $("pw").addEventListener("keydown", function(e){ if(e.key==="Enter") $("loginBtn").click(); });
+
+  function changeOrg(){
+    del("hz_org_code"); del("hz_org");
+    org = null;
+    document.documentElement.style.setProperty("--brand", "#143D75");
+    document.documentElement.style.setProperty("--on-brand", "#fff");
+    show($("app"), false); show($("loginScreen"), false); show($("orgScreen"), true);
+    $("orgCode").value = "";
+    $("menuScrim").classList.add("hidden");
+  }
+  $("changeOrg1").addEventListener("click", changeOrg);
+  $("changeOrg2").addEventListener("click", changeOrg);
+
+  $("signout").addEventListener("click", function(){
+    db.auth.signOut().then(function(){ location.reload(); });
+  });
+  $("menuBtn").addEventListener("click", function(){
+    $("menuOrg").textContent = org ? org.name : "";
+    $("menuWho").textContent = me
+      ? ((me.display_name || "Signed in") + (me.unit_number ? " \u00B7 " + me.unit_number : "")
+         + " \u00B7 " + me.role)
+      : "Signed in";
+    $("menuScrim").classList.remove("hidden");
+  });
+  $("menuClose").addEventListener("click", function(){ $("menuScrim").classList.add("hidden"); });
+  $("menuScrim").addEventListener("click", function(e){
+    if(e.target === $("menuScrim")) $("menuScrim").classList.add("hidden");
+  });
+
+  /* =============== 3. load everything =============== */
+  function cacheKey(){ return "hz_data_" + (org ? org.code : "x"); }
+
+  function boot(){
+    show($("loginScreen"), false);
+    show($("orgScreen"), false);
+    show($("app"), true);
+
+    var c = get(cacheKey());
+    if(c){
+      me = c.me; tiles = c.tiles || []; features = c.features || {};
+      hospitals = c.hospitals || []; specs = c.specs || [];
+      fromCache = true; renderHome();
+    }
+
+    Promise.all([
+      db.from("memberships").select("role,status,unit_number,display_name")
+        .eq("org_id", org.org_id).maybeSingle(),
+      db.from("orgs").select("name,dispatch_phone,medical_control_phone,epcr_url,brand_primary,brand_on_primary")
+        .eq("id", org.org_id).maybeSingle(),
+      db.from("tiles").select("label,kind,target,icon,feature_key,min_role,sort_order")
+        .eq("org_id", org.org_id).eq("is_active", true).order("sort_order"),
+      db.from("v_org_features").select("feature_key,enabled").eq("org_id", org.org_id),
+      db.from("hospitals")
+        .select("name,phone_call,phone_red,address,door_code,lat,lng,specialties,sort_order")
+        .eq("org_id", org.org_id).eq("is_active", true).order("sort_order"),
+      db.from("hospital_specialties").select("name,label,css_class,is_key,sort_order")
+        .eq("org_id", org.org_id).eq("is_active", true).order("sort_order")
+    ]).then(function(r){
+      if(r[0].data) me = r[0].data;
+      if(r[1].data){
+        org.name = r[1].data.name;
+        org.dispatch_phone = r[1].data.dispatch_phone;
+        org.medical_control_phone = r[1].data.medical_control_phone;
+        org.brand_primary = r[1].data.brand_primary || org.brand_primary;
+        org.brand_on_primary = r[1].data.brand_on_primary || org.brand_on_primary;
+        paintBrand();
+      }
+      tiles = r[2].data || [];
+      features = {};
+      (r[3].data || []).forEach(function(f){ features[f.feature_key] = f.enabled; });
+      hospitals = r[4].data || [];
+      specs     = r[5].data || [];
+      fromCache = false;
+
+      if(!me || me.status !== "active"){
+        $("tiles").innerHTML = '<div class="empty" style="grid-column:1/-1">'
+          + (me && me.status === "pending"
+              ? "Your account is waiting for an administrator to approve it."
+              : "You are not an active member of this organization.")
+          + '</div>';
+        $("callRow").innerHTML = "";
+        return;
+      }
+
+      put(cacheKey(), {me:me, tiles:tiles, features:features,
+                       hospitals:hospitals, specs:specs, org:org});
+      renderHome();
+    }).catch(function(){
+      if(!tiles.length){
+        $("tiles").innerHTML = '<div class="empty" style="grid-column:1/-1">'
+          + 'No connection, and nothing saved on this phone yet.</div>';
+      }
+    });
+  }
+
+  /* =============== home =============== */
+  var ROLE_RANK = { guest:0, member:1, dispatcher:2, admin:3 };
+
+  function renderHome(){
+    screen = "home";
+    $("screenTitle").textContent = org ? org.name : "Hatzalah";
+    show($("backBtn"), false);
+    show($("searchWrap"), false);
+    show($("chips"), false);
+    show($("homeScreen"), true);
+    show($("hospScreen"), false);
+    show($("offline"), fromCache || !navigator.onLine);
+    if(me && me.unit_number){
+      $("unitBadge").textContent = me.unit_number;
+      show($("unitBadge"), true);
+    }
+
+    var cr = "";
+    if(org && org.dispatch_phone){
+      cr += '<button class="callbtn js-dial" data-n="'+esc(org.dispatch_phone)+'">'
+          + '<small>Tap to call</small>Dispatch</button>';
+    }
+    if(org && org.medical_control_phone){
+      cr += '<button class="callbtn js-dial" data-n="'+esc(org.medical_control_phone)+'">'
+          + '<small>Tap to call</small>Medical Control</button>';
+    }
+    $("callRow").innerHTML = cr;
+
+    var myRank = ROLE_RANK[me ? me.role : "guest"] || 0;
+    var visible = tiles.filter(function(t){
+      if(t.feature_key && features[t.feature_key] === false) return false;
+      if((ROLE_RANK[t.min_role] || 0) > myRank) return false;
+      return true;
+    });
+
+    if(!visible.length){
+      $("tiles").innerHTML = '<div class="empty" style="grid-column:1/-1">No features switched on yet.</div>';
+      return;
+    }
+
+    $("tiles").innerHTML = visible.map(function(t){
+      var built = t.kind !== "app" || BUILT[t.target];
+      var ico = ICONS[t.icon] || ICONS.file;
+      if(t.kind === "link") ico = ICONS.link;
+      if(t.kind === "phone") ico = ICONS.phone;
+      return '<button class="tile'+(built?"":" soon")+' js-tile" '
+        + 'data-kind="'+esc(t.kind)+'" data-target="'+esc(t.target)+'" '
+        + 'data-built="'+(built?"1":"0")+'">'
+        + '<span class="ti"><svg viewBox="0 0 24 24">'+ico+'</svg></span>'
+        + '<span><b>'+esc(t.label)+'</b>'
+        + (built ? '' : '<br><span class="soonlab">Coming soon</span>')+'</span>'
+        + '</button>';
+    }).join("");
+  }
+
+  document.addEventListener("click", function(e){
+    var t = e.target;
+    if(!t || !t.closest) return;
+
+    var d = t.closest(".js-dial");
+    if(d){ dial(d.getAttribute("data-n")); return; }
+
+    var tile = t.closest(".js-tile");
+    if(tile){
+      if(tile.getAttribute("data-built") !== "1") return;
+      var kind = tile.getAttribute("data-kind"), target = tile.getAttribute("data-target");
+      if(kind === "link"){ window.open(target, "_blank", "noopener"); return; }
+      if(kind === "phone"){ dial(target); return; }
+      if(target === "/hospitals") openHospitals();
+      return;
+    }
+  });
+
+  $("backBtn").addEventListener("click", renderHome);
+
+  /* =============== hospitals =============== */
+  function openHospitals(){
+    screen = "hospitals";
+    $("screenTitle").textContent = "Hospitals";
+    show($("backBtn"), true);
+    show($("unitBadge"), false);
+    show($("searchWrap"), true);
+    show($("chips"), true);
+    show($("homeScreen"), false);
+    show($("hospScreen"), true);
+    buildChips();
+    renderHospitals();
+  }
+
+  function specMeta(name){
+    for(var i=0;i<specs.length;i++){ if(specs[i].name === name) return specs[i]; }
+    return { name:name, label:name, css_class:"", is_key:true, sort_order:999 };
+  }
+  function tagHTML(m){ return '<span class="tag '+(m.css_class||"")+'">'+esc(m.label)+'</span>'; }
+
+  function buildChips(){
+    var used = {};
+    hospitals.forEach(function(h){ (h.specialties||[]).forEach(function(s){ used[s]=1; }); });
+    var list = specs.filter(function(s){ return used[s.name]; });
+    Object.keys(used).forEach(function(n){
+      var known = false;
+      for(var i=0;i<list.length;i++){ if(list[i].name===n){ known=true; break; } }
+      if(!known) list.push(specMeta(n));
+    });
+    $("chips").innerHTML = list.map(function(s){
+      return '<button class="chip js-chip" data-n="'+esc(s.name)+'" aria-pressed="'
+        + (filters[s.name]?"true":"false")+'">'+esc(s.label)+'</button>';
+    }).join("");
+  }
+
+  $("chips").addEventListener("click", function(e){
+    var c = e.target.closest && e.target.closest(".js-chip");
+    if(!c) return;
+    var n = c.getAttribute("data-n");
+    if(filters[n]) delete filters[n]; else filters[n] = 1;
+    buildChips(); renderHospitals();
+  });
+
+  function renderHospitals(){
+    var q = $("search").value.trim().toLowerCase();
+    var active = Object.keys(filters);
+    show($("offline"), fromCache || !navigator.onLine);
+
+    var list = hospitals.filter(function(h){
+      for(var i=0;i<active.length;i++){
+        if((h.specialties||[]).indexOf(active[i]) < 0) return false;
+      }
+      if(!q) return true;
+      var hay = (h.name+" "+(h.specialties||[]).join(" ")+" "+(h.door_code||"")).toLowerCase();
+      return hay.indexOf(q) > -1;
+    });
+
+    $("count").textContent = (active.length || q)
+      ? list.length + " of " + hospitals.length + " hospitals"
+      : hospitals.length + " hospitals";
+
+    if(!list.length){
+      $("list").innerHTML = '<div class="empty">'
+        + (active.length ? "No hospitals match those filters."
+                         : "No hospitals match \u201C"+esc(q)+"\u201D.") + '</div>';
+      return;
+    }
+
+    $("list").innerHTML = list.map(function(h){
+      var on = (h.specialties||[]).map(specMeta)
+                 .sort(function(a,b){ return a.sort_order - b.sort_order; });
+      var key = on.filter(function(s){ return s.is_key; });
+      var extra = on.filter(function(s){ return !s.is_key; });
+
+      var navHref = "";
+      if(h.lat && h.lng){
+        navHref = "https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(h.lat+","+h.lng);
+      } else if(h.address){
+        navHref = "https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(h.address);
+      }
+      var gaps = [];
+      if(!h.phone_call) gaps.push("phone number");
+      if(!navHref)      gaps.push("address");
+
+      return '<div class="hcard">'
+        + '<button class="hcard-top js-toggle" aria-expanded="false">'
+        +   '<span class="nm"><b>'+esc(h.name)+'</b>'
+        +     (key.length?'<span class="tags">'+key.map(tagHTML).join("")+'</span>':'')
+        +   '</span>'
+        +   '<svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>'
+        + '</button>'
+        + '<div class="hcard-body">'
+        +   '<div class="hrow">'
+        +     (h.phone_call?'<button class="hbtn js-dial" data-n="'+esc(h.phone_call)+'">'+ICON_CALL+'Call</button>':'')
+        +     (navHref?'<button class="hbtn nav js-nav" data-h="'+esc(navHref)+'">'+ICON_NAV+'Navigate</button>':'')
+        +   '</div>'
+        +   (h.phone_red?'<div class="hrow"><button class="hbtn red js-dial" data-n="'+esc(h.phone_red)+'">'+ICON_CALL+'Red Phone</button></div>':'')
+        +   '<div class="hmeta">'
+        +     (h.door_code?'<div><span class="k">Door code</span><br>'+esc(h.door_code)+'</div>':'')
+        +     (h.address?'<div><span class="k">Address</span><br>'+esc(h.address)+'</div>':'')
+        +   '</div>'
+        +   (extra.length?'<div><button class="hmore js-more">More specialties</button>'
+              +'<div class="tags js-extra" style="display:none">'+extra.map(tagHTML).join("")+'</div></div>':'')
+        +   (gaps.length?'<div class="missing">No '+gaps.join(" or ")+' on file</div>':'')
+        + '</div>'
+      + '</div>';
+    }).join("");
+  }
+
+  $("list").addEventListener("click", function(e){
+    var t = e.target;
+    if(!t || !t.closest) return;
+    var nav = t.closest(".js-nav");
+    if(nav){ e.stopPropagation(); window.open(nav.getAttribute("data-h"),"_blank","noopener"); return; }
+    var more = t.closest(".js-more");
+    if(more){
+      e.stopPropagation();
+      var wrap = more.parentNode.querySelector(".js-extra");
+      if(wrap){
+        var s = wrap.style.display === "none";
+        wrap.style.display = s ? "flex" : "none";
+        more.textContent = s ? "Fewer specialties" : "More specialties";
+      }
+      return;
+    }
+    if(t.closest(".js-dial")) return;   // handled globally
+    var tog = t.closest(".js-toggle");
+    if(tog){
+      var card = tog.parentNode;
+      var open = card.classList.toggle("open");
+      tog.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+  });
+
+  $("search").addEventListener("input", renderHospitals);
+  window.addEventListener("online",  function(){ if(screen==="hospitals") renderHospitals(); else renderHome(); });
+  window.addEventListener("offline", function(){ if(screen==="hospitals") renderHospitals(); else renderHome(); });
+
+  /* =============== start =============== */
+  var savedOrg = get("hz_org");
+  if(savedOrg){ org = savedOrg; paintBrand(); }
+
+  db.auth.getSession().then(function(r){
+    var signedIn = r && r.data && r.data.session;
+    if(signedIn && org) boot();
+    else if(org)        goLogin();
+    else                show($("orgScreen"), true);
+  }).catch(function(){
+    if(org) goLogin();
+  });
+})();
+</script>
+</body>
+</html>
