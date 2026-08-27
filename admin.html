@@ -26,6 +26,7 @@
   #login p{margin:0 0 24px;opacity:.7}
   .f{margin-bottom:13px}
   .f label{display:block;font-size:13px;margin-bottom:5px;opacity:.8}
+  .f textarea{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
   .f input,.f select,.f textarea{width:100%;padding:11px;border-radius:9px;
     border:1px solid var(--line);background:#fff;color:var(--ink);font-size:15px}
   #login .f input{border-color:rgba(255,255,255,.25);background:rgba(0,0,0,.22);color:#fff}
@@ -314,8 +315,23 @@
         if(r.error) throw r.error;
         var rows = r.data || [];
         var gaps = rows.filter(function(h){ return !h.phone_call || !h.address; }).length;
+        var noCoords = rows.filter(function(h){ return !h.lat || !h.lng; }).length;
 
-        var html = '<div class="card"><h2>Add a hospital</h2>'
+        var html = '<div class="card"><h2>Import from a spreadsheet</h2>'
+          + '<p class="hint">Select your rows in Excel or Google Sheets \u2014 including the header '
+          + 'row \u2014 copy, and paste below. Columns are matched by their headings.</p>'
+          + '<p class="hint"><b>Recognised headings:</b> Hospital Name, Phone (Call), Red Phone, '
+          + 'Address, Door Code, Latitude, Longitude. Any other column that contains an X is '
+          + 'treated as a specialty, so tick-box columns like Trauma III or Burn come across '
+          + 'as they are. A column named Hide skips those rows.</p>'
+          + '<div class="f"><textarea id="imp_data" rows="6" placeholder="Paste here"></textarea></div>'
+          + '<label class="row" style="margin-bottom:12px"><input type="checkbox" id="imp_replace" '
+          + 'style="width:auto"> <span>Replace the current list instead of adding to it</span></label>'
+          + '<div class="row"><button id="imp_check" class="btn">Check it</button>'
+          + '<button id="imp_go" class="btn primary hidden">Import</button></div>'
+          + '<div id="imp_out" style="margin-top:13px"></div></div>'
+
+          + '<div class="card"><h2>Add a hospital</h2>'
           + '<p class="hint">Only the name is required. Everything else can be filled in later.</p>'
           + '<div class="grid2">'
           + '<div class="f"><label>Name</label><input id="nh_name"></div>'
@@ -323,12 +339,22 @@
           + '<div class="f"><label>Red phone</label><input id="nh_red"></div>'
           + '<div class="f"><label>Door code</label><input id="nh_door"></div>'
           + '<div class="f" style="grid-column:1/-1"><label>Address</label><input id="nh_addr"></div>'
-          + '</div><button id="nh_add" class="btn primary">Add hospital</button></div>';
+          + '<div class="f"><label>Latitude</label><input id="nh_lat" inputmode="decimal" placeholder="29.693237"></div>'
+          + '<div class="f"><label>Longitude</label><input id="nh_lng" inputmode="decimal" placeholder="-95.520742"></div>'
+          + '</div>'
+          + '<p class="hint" style="margin:0 0 12px">Coordinates point Navigate at the ambulance bay '
+          + 'instead of the front door. When they are set they win, and the address is still shown '
+          + 'on the card.</p>'
+          + '<button id="nh_add" class="btn primary">Add hospital</button></div>';
 
         html += '<div class="card"><h2>'+rows.length+' hospitals</h2>';
         if(gaps){
           html += '<p class="hint">'+gaps+' are missing a phone number or an address. '
                +  'Members will see "not on file" for those.</p>';
+        }
+        if(noCoords){
+          html += '<p class="hint">'+noCoords+' have no ambulance bay coordinates, so Navigate '
+               +  'will send members to the street address instead.</p>';
         }
 
         if(!rows.length){
@@ -337,7 +363,8 @@
         }
 
         html += '<div style="overflow-x:auto"><table><thead><tr>'
-             +  '<th>Name</th><th>Phone</th><th>Door</th><th>Address</th><th></th>'
+             +  '<th>Name</th><th>Phone</th><th>Door</th><th>Address</th>'
+             +  '<th>Ambulance bay</th><th></th>'
              +  '</tr></thead><tbody>';
         rows.forEach(function(h){
           html += '<tr>'
@@ -345,6 +372,10 @@
             + '<td><input class="js-h" data-id="'+h.id+'" data-f="phone_call" value="'+esc(h.phone_call||"")+'" placeholder="\u2014"></td>'
             + '<td><input class="js-h" data-id="'+h.id+'" data-f="door_code" value="'+esc(h.door_code||"")+'" placeholder="\u2014" style="width:90px"></td>'
             + '<td><input class="js-h" data-id="'+h.id+'" data-f="address" value="'+esc(h.address||"")+'" placeholder="\u2014"></td>'
+            + '<td style="white-space:nowrap">'
+            +   '<input class="js-h" data-id="'+h.id+'" data-f="lat" value="'+esc(h.lat||"")+'" placeholder="lat" style="width:88px" inputmode="decimal">'
+            +   '<input class="js-h" data-id="'+h.id+'" data-f="lng" value="'+esc(h.lng||"")+'" placeholder="lng" style="width:88px;margin-left:4px" inputmode="decimal">'
+            + '</td>'
             + '<td><button class="btn danger js-hdel" data-id="'+h.id+'" data-name="'+esc(h.name)+'">Delete</button></td>'
             + '</tr>';
         });
@@ -357,7 +388,157 @@
       });
   }
 
+  var IMPORT_READY = null;
+
+  var FIELD_ALIASES = {
+    name:       ["hospital name","name","hospital"],
+    phone_call: ["phone (call)","phone call","phone","main phone","telephone"],
+    phone_red:  ["red phone","redphone","red"],
+    address:    ["address (navigate)","address","street address","location"],
+    door_code:  ["door code","doorcode","door","entry code","keypad"],
+    lat:        ["latitude","lat"],
+    lng:        ["longitude","lng","long","lon"]
+  };
+  var IGNORE = ["code","specialties (summary)","specialties","summary","notes",""];
+
+  function normHeader(h){ return String(h||"").trim().toLowerCase(); }
+
+  function matchField(header){
+    var h = normHeader(header);
+    for(var f in FIELD_ALIASES){
+      if(FIELD_ALIASES[f].indexOf(h) > -1) return f;
+    }
+    return null;
+  }
+
+  function parsePaste(text){
+    var lines = text.replace(/\r/g,"").split("\n").filter(function(l){ return l.trim() !== ""; });
+    if(lines.length < 2) return { error:"Paste at least a header row and one hospital." };
+    var sep = lines[0].indexOf("\t") > -1 ? "\t" : ",";
+    var headers = lines[0].split(sep).map(function(h){ return h.trim().replace(/^"|"$/g,""); });
+
+    var map = {}, specCols = [], hideCol = -1;
+    headers.forEach(function(h, i){
+      var n = normHeader(h);
+      if(n === "hide"){ hideCol = i; return; }
+      if(IGNORE.indexOf(n) > -1) return;
+      var f = matchField(h);
+      if(f){ map[f] = i; return; }
+      if(h) specCols.push({ index:i, label:h });
+    });
+
+    if(map.name === undefined) return { error:"No column named Hospital Name was found." };
+
+    var rows = [], skipped = 0;
+    for(var i=1;i<lines.length;i++){
+      var cells = lines[i].split(sep).map(function(c){ return c.trim().replace(/^"|"$/g,""); });
+      if(hideCol > -1 && (cells[hideCol]||"").toUpperCase() === "X"){ skipped++; continue; }
+      var name = cells[map.name];
+      if(!name){ skipped++; continue; }
+
+      var specs = [];
+      specCols.forEach(function(sc){
+        var v = (cells[sc.index]||"").trim().toUpperCase();
+        if(v === "X" || v === "YES" || v === "TRUE" || v === "1") specs.push(sc.label);
+      });
+
+      var lat = map.lat !== undefined ? parseFloat(cells[map.lat]) : NaN;
+      var lng = map.lng !== undefined ? parseFloat(cells[map.lng]) : NaN;
+
+      rows.push({
+        org_id: orgId,
+        name: name,
+        phone_call: map.phone_call !== undefined ? (cells[map.phone_call]||null) : null,
+        phone_red:  map.phone_red  !== undefined ? (cells[map.phone_red] ||null) : null,
+        address:    map.address    !== undefined ? (cells[map.address]   ||null) : null,
+        door_code:  map.door_code  !== undefined ? (cells[map.door_code] ||null) : null,
+        lat: isNaN(lat) ? null : lat,
+        lng: isNaN(lng) ? null : lng,
+        specialties: specs,
+        sort_order: i * 10
+      });
+    }
+
+    return { rows:rows, skipped:skipped, matched:Object.keys(map),
+             specCols:specCols.map(function(c){ return c.label; }) };
+  }
+
+  function wireImport(){
+    var chk = $("imp_check"), go = $("imp_go"), out = $("imp_out");
+    if(!chk) return;
+
+    chk.addEventListener("click", function(){
+      IMPORT_READY = null; go.classList.add("hidden");
+      var r = parsePaste($("imp_data").value);
+      if(r.error){ out.innerHTML = '<div class="err">'+esc(r.error)+'</div>'; return; }
+      if(!r.rows.length){ out.innerHTML = '<div class="err">No usable rows found.</div>'; return; }
+
+      IMPORT_READY = r;
+      var withCoords = r.rows.filter(function(x){ return x.lat && x.lng; }).length;
+      var withPhone  = r.rows.filter(function(x){ return x.phone_call; }).length;
+
+      out.innerHTML = '<div class="warn"><b>'+r.rows.length+' hospitals ready.</b><br>'
+        + 'Columns matched: '+esc(r.matched.join(", "))+'<br>'
+        + (r.specCols.length ? 'Treated as specialties: '+esc(r.specCols.join(", "))+'<br>' : '')
+        + withPhone+' with a phone number, '+withCoords+' with ambulance bay coordinates'
+        + (r.skipped ? '<br>'+r.skipped+' rows skipped (hidden or unnamed)' : '')
+        + '</div>'
+        + '<div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Phone</th>'
+        + '<th>Door</th><th>Coords</th><th>Specialties</th></tr></thead><tbody>'
+        + r.rows.slice(0,5).map(function(x){
+            return '<tr><td>'+esc(x.name)+'</td><td>'+esc(x.phone_call||"\u2014")+'</td>'
+              + '<td>'+esc(x.door_code||"\u2014")+'</td>'
+              + '<td>'+(x.lat&&x.lng ? "yes" : "\u2014")+'</td>'
+              + '<td class="small">'+esc(x.specialties.join(", ")||"\u2014")+'</td></tr>';
+          }).join("")
+        + '</tbody></table></div>'
+        + (r.rows.length > 5 ? '<p class="hint">Showing the first 5 of '+r.rows.length+'.</p>' : '');
+      go.classList.remove("hidden");
+    });
+
+    go.addEventListener("click", function(){
+      if(!IMPORT_READY) return;
+      var replace = $("imp_replace").checked;
+      if(replace && !confirm("This deletes every hospital currently in this organization, then imports "
+          + IMPORT_READY.rows.length + ". Continue?")) return;
+
+      go.disabled = true; go.textContent = "Importing\u2026";
+
+      var step = replace
+        ? db.from("hospitals").delete().eq("org_id", orgId)
+        : Promise.resolve({error:null});
+
+      step.then(function(d){
+        if(d && d.error) throw d.error;
+        return db.from("hospitals").insert(IMPORT_READY.rows);
+      }).then(function(r){
+        if(r.error) throw r.error;
+        // make sure every specialty that came in is known to this org
+        var names = {};
+        IMPORT_READY.rows.forEach(function(x){
+          x.specialties.forEach(function(sp){ names[sp] = 1; });
+        });
+        var list = Object.keys(names);
+        if(!list.length) return { error:null };
+        return db.from("hospital_specialties").upsert(
+          list.map(function(n, i){
+            return { org_id:orgId, name:n, label:n, is_key:true, sort_order:(i+1)*10 };
+          }), { onConflict:"org_id,name", ignoreDuplicates:true });
+      }).then(function(r){
+        go.disabled = false; go.textContent = "Import";
+        if(r && r.error) throw r.error;
+        toast("Imported " + IMPORT_READY.rows.length + " hospitals");
+        IMPORT_READY = null;
+        renderHospitals();
+      }).catch(function(e){
+        go.disabled = false; go.textContent = "Import";
+        $("imp_out").innerHTML = '<div class="err">'+esc(e.message||"Import failed")+'</div>';
+      });
+    });
+  }
+
   function wireHospitalForm(){
+    wireImport();
     var add = $("nh_add");
     if(add) add.addEventListener("click", function(){
       var name = $("nh_name").value.trim();
@@ -369,6 +550,8 @@
         phone_red:  $("nh_red").value.trim()   || null,
         door_code:  $("nh_door").value.trim()  || null,
         address:    $("nh_addr").value.trim()  || null,
+        lat: parseFloat($("nh_lat").value) || null,
+        lng: parseFloat($("nh_lng").value) || null,
         sort_order: 9999
       }).then(function(r){
         add.disabled = false;
@@ -559,7 +742,14 @@
   document.addEventListener("blur", function(e){
     var i = e.target;
     if(!i.classList || !i.classList.contains("js-h")) return;
-    var patch = {}; patch[i.getAttribute("data-f")] = i.value.trim() || null;
+    var f = i.getAttribute("data-f"), v = i.value.trim();
+    var patch = {};
+    if(f === "lat" || f === "lng"){
+      if(v && isNaN(parseFloat(v))){ toast("Coordinates must be numbers."); return; }
+      patch[f] = v ? parseFloat(v) : null;
+    } else {
+      patch[f] = v || null;
+    }
     db.from("hospitals").update(patch).eq("id", i.getAttribute("data-id"))
       .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
   }, true);
