@@ -2196,6 +2196,7 @@
 
       el.innerHTML = html;
       wireCerts();
+      wireDocUpload();
     }).catch(function(e){
       el.innerHTML = '<div class="card"><div class="err">'
         + esc(e.message || "Could not load certifications") + '</div></div>';
@@ -2343,6 +2344,184 @@
         .then(function(r){ if(r.error) return oops(r.error);
                            close(); toast("Rejected"); renderCerts(); }).catch(oops);
     });
+  }
+
+  /* ---------- putting many scanned documents on file at once ----------
+     Twenty-four people with fourteen certificates each is 336 documents.
+     Nobody is opening each person and attaching them one at a time. Drop
+     the whole folder in; the file names say who and what. */
+
+  var DOC_QUEUE = null, DOC_MATCHES = null;
+
+  function renderDocUpload(){
+    return '<div class="card"><h2>Upload many documents at once</h2>'
+      + '<p class="hint">Select a whole folder of scanned certificates. Each file is matched '
+      + 'to a person and a certification by its <b>name</b>, so name them like this:</p>'
+      + '<pre class="mono" style="background:#F4F6FA;padding:11px;border-radius:9px;'
+      +   'white-space:pre-wrap;margin:0 0 12px">H-44 drivers license.pdf\n'
+      +   'H-2_NREMT.jpg\n'
+      +   'D-218 American Heart BLS.pdf</pre>'
+      + '<p class="hint">The unit number comes first, then the certification. Punctuation and '
+      + 'capitals do not matter. Anything it cannot place is listed so you can rename and try '
+      + 'again \u2014 nothing is uploaded until you have seen the matches.</p>'
+      + '<div class="f"><input id="doc_files" type="file" multiple '
+      +   'accept="image/*,application/pdf"></div>'
+      + '<div id="doc_out"></div></div>';
+  }
+
+  function wireDocUpload(){
+    var f = $("doc_files");
+    if(!f) return;
+    f.addEventListener("change", function(e){
+      DOC_QUEUE = Array.prototype.slice.call(e.target.files || []);
+      if(!DOC_QUEUE.length) return;
+      matchDocs();
+    });
+  }
+
+  /* "H-44 drivers license.pdf" has to find "Driver's License". Apostrophes,
+     slashes and plurals are how people actually name files. */
+  function normWord(x){
+    return String(x || "").toLowerCase()
+      .replace(/['’]/g, "")          // driver's -> drivers
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\b(\w+)s\b/g, "$1")      // licenses -> license
+      .trim();
+  }
+
+  function matchDocs(){
+    var out = $("doc_out");
+    out.innerHTML = '<div class="empty">Matching\u2026</div>';
+
+    Promise.all([
+      db.from("people").select("unit_number,first_name,last_name")
+        .eq("org_id", orgId).not("unit_number", "is", null),
+      db.from("certification_types").select("id,name")
+        .eq("org_id", orgId).eq("is_active", true).order("sort_order")
+    ]).then(function(r){
+      var people = r[0].data || [], types = r[1].data || [];
+      var matched = [], unmatched = [];
+
+      DOC_QUEUE.forEach(function(file){
+        var base = normWord(file.name.replace(/\.[a-z0-9]+$/i, ""));
+
+        // the unit is whichever unit number appears in the name
+        var person = null;
+        people.forEach(function(p){
+          var u = normWord(p.unit_number);
+          if(!u) return;
+          if((" " + base + " ").indexOf(" " + u + " ") > -1){
+            if(!person || u.length > normWord(person.unit_number).length) person = p;
+          }
+        });
+
+        // the certification is the longest type name that appears in it
+        var type = null;
+        types.forEach(function(t){
+          var n = normWord(t.name);
+          if(n && base.indexOf(n) > -1){
+            if(!type || n.length > normWord(type.name).length) type = t;
+          }
+        });
+
+        if(person && type) matched.push({ file:file, person:person, type:type });
+        else unmatched.push({ file:file,
+              why: !person ? "no unit number found" : "no certification name found" });
+      });
+
+      DOC_MATCHES = matched;
+
+      var html = '';
+      if(matched.length){
+        html += '<div class="warn"><b>'+matched.length+' ready to upload.</b>'
+             +  (unmatched.length ? '<br>'+unmatched.length+' could not be placed.' : '')
+             +  '</div>'
+             + '<div class="scroller tall"><table><thead><tr><th>File</th><th>Person</th>'
+             + '<th>Certification</th></tr></thead><tbody>'
+             + matched.map(function(m){
+                 return '<tr><td class="small">'+esc(m.file.name)+'</td>'
+                   + '<td>'+esc(m.person.unit_number)+' \u00B7 '
+                   + esc(((m.person.first_name||"")+" "+(m.person.last_name||"")).trim())+'</td>'
+                   + '<td>'+esc(m.type.name)+'</td></tr>';
+               }).join("")
+             + '</tbody></table></div>'
+             + '<div class="row" style="margin-top:12px">'
+             + '<button id="doc_go" class="btn primary">Upload '+matched.length+' documents</button>'
+             + '</div>'
+             + '<div id="doc_progress" class="hidden" style="margin-top:12px">'
+             +   '<div class="bar-outer"><div id="doc_bar" class="bar-inner"></div></div>'
+             +   '<div id="doc_status" class="mono">\u2014</div></div>';
+      }
+      if(unmatched.length){
+        html += '<div class="card" style="margin-top:12px;border-color:#F0BEC0">'
+             + '<h2>Could not be placed</h2>'
+             + '<p class="hint">Rename these so the unit number and the certification both '
+             + 'appear, then choose them again.</p>'
+             + '<div class="scroller narrow"><table><thead><tr><th>File</th><th>Why</th>'
+             + '</tr></thead><tbody>'
+             + unmatched.map(function(u){
+                 return '<tr><td class="small">'+esc(u.file.name)+'</td>'
+                   + '<td class="small">'+esc(u.why)+'</td></tr>';
+               }).join("")
+             + '</tbody></table></div></div>';
+      }
+      out.innerHTML = html || '<div class="err">Nothing could be matched.</div>';
+
+      if($("doc_go")) $("doc_go").addEventListener("click", uploadDocs);
+    }).catch(function(e){
+      out.innerHTML = '<div class="err">'+esc(e.message||"Could not match")+'</div>';
+    });
+  }
+
+  function uploadDocs(){
+    if(!DOC_MATCHES || !DOC_MATCHES.length) return;
+    var go = $("doc_go"); go.disabled = true;
+    $("doc_progress").classList.remove("hidden");
+
+    var done = 0, failed = [], total = DOC_MATCHES.length;
+
+    function step(i){
+      if(i >= total){
+        go.disabled = false;
+        $("doc_status").textContent = done + " uploaded"
+          + (failed.length ? ", " + failed.length + " failed" : "");
+        $("doc_out").innerHTML = (failed.length
+            ? '<div class="err">These failed:<br>' + failed.map(esc).join("<br>") + '</div>'
+            : '<div class="warn">All ' + done + ' documents are on file.</div>')
+          + renderDocUpload();
+        wireDocUpload();
+        DOC_QUEUE = null; DOC_MATCHES = null;
+        return;
+      }
+
+      var m = DOC_MATCHES[i];
+      $("doc_bar").style.width = Math.round(i/total*100) + "%";
+      $("doc_status").textContent = (i+1) + " of " + total + " \u00B7 " + m.file.name;
+
+      var clean = m.file.name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+      var path = orgId + "/certs/unit-" + normWord(m.person.unit_number).replace(/ /g,"-")
+               + "/" + Date.now().toString(36) + "-" + clean;
+
+      db.storage.from("member-docs")
+        .upload(path, m.file, { upsert:true,
+                                contentType:m.file.type || "application/octet-stream" })
+        .then(function(r){
+          if(r.error) throw r.error;
+          return db.from("roster_certifications").upsert({
+            org_id: orgId, unit_number: m.person.unit_number,
+            cert_type_id: m.type.id, file_path: path
+          }, { onConflict:"org_id,unit_number,cert_type_id" });
+        })
+        .then(function(r){
+          if(r.error) throw r.error;
+          done++; step(i+1);
+        })
+        .catch(function(err){
+          failed.push(m.file.name + " (" + ((err && err.message) || "failed") + ")");
+          step(i+1);
+        });
+    }
+    step(0);
   }
 
   /* ---------- everything about one person, in one zip ----------
