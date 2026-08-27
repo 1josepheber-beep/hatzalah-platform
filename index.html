@@ -1220,12 +1220,12 @@
 <script>
 (function(){
   "use strict";
-  var SHEET_ID="1gM1ndlnuKvQK8JvM_STUyrG8XbAl0W5IQk10EQTF98o";
+  var SHEET_ID="";  /* the Google Sheet is gone; data comes from Supabase */
   var LS="hoh_member_v1";
   var GIS_CLIENT_ID="687013718221-o3v640qv75gohuqcqkmuj0durkva01ru.apps.googleusercontent.com";
-  var GMAPS_KEY="AIzaSyB41nZnWZKtx6dcCKhiKhZgcIksNnuciMw";
-  var GUEST_URL="https://script.google.com/macros/s/AKfycbz1whkfWWlbj5Q8WelSB57s2cToyiJ35i0xxwr5iw3OGGZlttRBohDsVCkk8oJGyzH6/exec";
-  var ORG_DOMAIN="houstonhatzalah.org";
+  var GMAPS_KEY="";  /* each organization brings its own - see Settings */
+  var GUEST_URL="";  /* the Apps Script is gone; demo passcodes live in the database */
+  var ORG_DOMAIN="";  /* each organization sets its own email domain */
   var G={token:"",exp:0,email:"",client:null,pending:null,inflight:null,verified:false};
   function gInit(){
     if(G.client||!(window.google&&google.accounts&&google.accounts.oauth2)) return;
@@ -1613,7 +1613,8 @@
         /* writes no longer go to a script; the layer below handles them */
         ["Profile Update URL", "supabase"],
         ["Code Log URL", "supabase"],
-        ["Upload Link", o.upload_url]
+        ["Upload Link", o.upload_url],
+        ["Maps Key", o.maps_api_key]
       ];
       var extra = o.settings || {};
       Object.keys(extra).forEach(function(k){ pairs.push([k, extra[k]]); });
@@ -4632,7 +4633,9 @@
     ensureGMaps._p=new Promise(function(res,rej){
       window.__gmReady=function(){ res(); };
       var s=document.createElement("script");
-      s.src="https://maps.googleapis.com/maps/api/js?key="+GMAPS_KEY+"&libraries=places&callback=__gmReady";
+      var mapKey = getSetting("Maps Key","") || GMAPS_KEY;
+      if(!mapKey){ rej(new Error("This organization has not set up a map key yet.")); return; }
+      s.src="https://maps.googleapis.com/maps/api/js?key="+mapKey+"&libraries=places&callback=__gmReady";
       s.async=true; s.onerror=rej; document.head.appendChild(s);
     });
     return ensureGMaps._p;

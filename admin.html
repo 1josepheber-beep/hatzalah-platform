@@ -1781,6 +1781,7 @@
       dispatch_phone: $("s_dispatch").value.trim() || null,
       medical_control_phone: $("s_medcon").value.trim() || null,
       upload_url: $("s_upload").value.trim() || null,
+      maps_api_key: $("s_mapkey").value.trim() || null,
       email_domains: dom ? [dom] : [],
       auth_mode: $("s_auth").value
     }).eq("id", orgId).select().then(function(r){
