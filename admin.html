@@ -143,6 +143,7 @@
     <button data-tab="hospitals">Hospitals</button>
     <button data-tab="protocols">Protocols</button>
     <button data-tab="tiles">Home screen</button>
+    <button data-tab="content">Content</button>
     <button data-tab="media">Images</button>
     <button data-tab="settings">Organization</button>
     <button data-tab="features">Features</button>
@@ -152,6 +153,7 @@
     <div id="tab-hospitals" class="hidden"></div>
     <div id="tab-protocols" class="hidden"></div>
     <div id="tab-tiles" class="hidden"></div>
+    <div id="tab-content" class="hidden"></div>
     <div id="tab-media" class="hidden"></div>
     <div id="tab-settings" class="hidden"></div>
     <div id="tab-features" class="hidden"></div>
@@ -172,7 +174,7 @@
   var $  = function(id){ return document.getElementById(id); };
 
   var isSuper = false, orgs = [], orgId = null, org = null;
-  var TABS = ["members","hospitals","protocols","tiles","media","settings","features"];
+  var TABS = ["members","hospitals","protocols","tiles","content","media","settings","features"];
 
   /* Remember where you were. Refreshing in the middle of data entry and
      landing back on the first tab is maddening. */
@@ -304,6 +306,7 @@
     if(tab === "hospitals") renderHospitals();
     if(tab === "protocols") renderProtocols();
     if(tab === "tiles") renderTiles();
+    if(tab === "content") renderContent();
     if(tab === "media") renderMedia();
     if(tab === "settings")  renderSettings();
     if(tab === "features")  renderFeatures();
@@ -1039,6 +1042,167 @@
     }
   }
 
+  /* ================= CONTENT =================
+     The lists that are not big enough to deserve their own tab: the
+     directory, apartment complexes, the vitals reference, the CPR buttons
+     and the document types. All edited the same way - change a box, click
+     out, saved. */
+
+  var CONTENT_SETS = {
+    directory: {
+      table: "directory_entries", label: "Directory",
+      hint: "Everyone in the org, including people who are not responders. Dates of birth and addresses stay hidden from ordinary members unless you allow them under Organization.",
+      order: "sort_order",
+      cols: [
+        { f:"sort_order",   l:"#",       w:"56px",  num:true },
+        { f:"entry_type",   l:"Type",    w:"110px" },
+        { f:"first_name",   l:"First" },
+        { f:"last_name",    l:"Last" },
+        { f:"unit_number",  l:"Unit",    w:"80px" },
+        { f:"phone",        l:"Phone",   w:"130px" },
+        { f:"level",        l:"Level",   w:"80px" },
+        { f:"address",      l:"Address" },
+        { f:"date_of_birth",l:"DOB",     w:"120px" },
+        { f:"is_active",    l:"Active",  w:"60px", bool:true }
+      ],
+      blank: { entry_type:"Responder", is_active:true, sort_order:999 }
+    },
+    complexes: {
+      table: "complexes", label: "Apartment complexes",
+      hint: "The building pins themselves are placed on the map in the member app, not here.",
+      order: "sort_order",
+      cols: [
+        { f:"sort_order", l:"#",       w:"56px", num:true },
+        { f:"name",       l:"Name" },
+        { f:"address",    l:"Address" },
+        { f:"map_path",   l:"Map image" },
+        { f:"gate_code",  l:"Gate code", w:"110px" },
+        { f:"is_active",  l:"Active",  w:"60px", bool:true }
+      ],
+      blank: { is_active:true, sort_order:999 }
+    },
+    vitals: {
+      table: "vitals_reference", label: "Vitals reference",
+      hint: "The adult and paediatric checklists.",
+      order: "sort_order",
+      cols: [
+        { f:"sort_order", l:"#",       w:"56px", num:true },
+        { f:"tab",        l:"Tab",     w:"110px" },
+        { f:"section",    l:"Section", w:"150px" },
+        { f:"item",       l:"Item" },
+        { f:"value1",     l:"Value" },
+        { f:"value2",     l:"Value 2" },
+        { f:"value3",     l:"Value 3" },
+        { f:"is_active",  l:"On",      w:"56px", bool:true }
+      ],
+      blank: { tab:"Adult", is_active:true, sort_order:999 }
+    },
+    cpr: {
+      table: "cpr_buttons", label: "CPR buttons",
+      hint: "The buttons a responder taps during a code, in the order they appear. Action tells the app what to count: Start, log, shock, epi, rhythm, rosc.",
+      order: "sort_order",
+      cols: [
+        { f:"sort_order", l:"#",      w:"56px", num:true },
+        { f:"label",      l:"Button" },
+        { f:"action",     l:"Action", w:"110px" },
+        { f:"color",      l:"Colour", w:"100px" },
+        { f:"is_active",  l:"On",     w:"56px", bool:true }
+      ],
+      blank: { action:"log", is_active:true, sort_order:999 }
+    },
+    uploads: {
+      table: "upload_types", label: "Document types",
+      hint: "What a member can send in from the file uploader.",
+      order: "sort_order",
+      cols: [
+        { f:"sort_order", l:"#",    w:"56px", num:true },
+        { f:"name",       l:"Document type" },
+        { f:"is_active",  l:"On",   w:"56px", bool:true }
+      ],
+      blank: { is_active:true, sort_order:999 }
+    }
+  };
+
+  var CONTENT_SET = "directory";
+
+  function renderContent(){
+    var el = $("tab-content");
+    var set = CONTENT_SETS[CONTENT_SET];
+
+    var picker = '<div class="card"><div class="row">'
+      + Object.keys(CONTENT_SETS).map(function(k){
+          return '<button class="btn js-cset'+(k===CONTENT_SET?" primary":"")+'" data-k="'+k+'">'
+            + esc(CONTENT_SETS[k].label) + '</button>';
+        }).join("")
+      + '</div></div>';
+
+    el.innerHTML = picker + '<div class="card"><div class="empty">Loading\u2026</div></div>';
+
+    db.from(set.table).select("*").eq("org_id", orgId).order(set.order)
+      .then(function(r){
+        if(r.error) throw r.error;
+        var rows = r.data || [];
+
+        var html = picker
+          + '<div class="card"><h2>'+esc(set.label)+'</h2>'
+          + '<p class="hint">'+esc(set.hint)+'</p>'
+          + '<p class="hint">'+rows.length+' entries. Change a box and click out to save.</p>'
+          + '<div class="row" style="margin-bottom:12px">'
+          +   '<button id="ct_add" class="btn primary">Add a row</button></div>';
+
+        if(!rows.length){
+          html += '<div class="empty">Nothing here yet.</div></div>';
+          el.innerHTML = html; wireContent(); return;
+        }
+
+        html += '<div class="scroller"><table><thead><tr>'
+          + set.cols.map(function(c){
+              return '<th'+(c.w?' style="width:'+c.w+'"':'')+'>'+esc(c.l)+'</th>'; }).join("")
+          + '<th></th></tr></thead><tbody>';
+
+        rows.forEach(function(row){
+          html += '<tr>' + set.cols.map(function(c){
+            if(c.bool){
+              return '<td style="text-align:center"><input type="checkbox" class="js-cbool" '
+                + 'data-id="'+row.id+'" data-f="'+c.f+'" '+(row[c.f]?"checked":"")+'></td>';
+            }
+            return '<td><input class="js-cin" data-id="'+row.id+'" data-f="'+c.f+'" '
+              + 'value="'+esc(row[c.f]==null?"":row[c.f])+'"'+(c.num?' inputmode="decimal"':'')+'></td>';
+          }).join("")
+          + '<td class="actions"><button class="xbtn js-cdel" data-id="'+row.id+'" '
+          + 'title="Delete">\u00D7</button></td></tr>';
+        });
+
+        html += '</tbody></table></div></div>';
+        el.innerHTML = html;
+        wireContent();
+      }).catch(function(e){
+        el.innerHTML = picker + '<div class="card"><div class="err">'
+          + esc(e.message||"Could not load") + '</div></div>';
+      });
+  }
+
+  function wireContent(){
+    Array.prototype.forEach.call(document.querySelectorAll(".js-cset"), function(b){
+      b.addEventListener("click", function(){
+        CONTENT_SET = b.getAttribute("data-k");
+        renderContent();
+      });
+    });
+    var add = $("ct_add");
+    if(add) add.addEventListener("click", function(){
+      var set = CONTENT_SETS[CONTENT_SET];
+      var row = { org_id: orgId };
+      for(var k in set.blank) row[k] = set.blank[k];
+      add.disabled = true;
+      db.from(set.table).insert(row).then(function(r){
+        add.disabled = false;
+        if(r.error) return oops(r.error);
+        renderContent();
+      }).catch(function(e){ add.disabled = false; oops(e); });
+    });
+  }
+
   /* ================= IMAGES =================
      Apartment maps, cabinet photos and tile icons. Drop in a whole folder
      at once. Files go to this organization's own storage, so one chapter's
@@ -1714,6 +1878,14 @@
         .then(function(r){ if(r.error) return oops(r.error); toast("Suspended"); renderMembers(); });
       return;
     }
+    var cd = t.closest(".js-cdel");
+    if(cd){
+      if(!confirm("Delete this row?")) return;
+      db.from(CONTENT_SETS[CONTENT_SET].table).delete().eq("id", cd.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error); toast("Deleted"); renderContent(); });
+      return;
+    }
+
     var td = t.closest(".js-tdel");
     if(td){
       if(!confirm("Remove the " + td.getAttribute("data-name") + " tile?")) return;
@@ -1797,6 +1969,12 @@
         .then(function(r){ if(r.error) return oops(r.error); toast("Saved"); renderTiles(); });
       return;
     }
+    if(el.classList && el.classList.contains("js-cbool")){
+      var cp = {}; cp[el.getAttribute("data-f")] = el.checked;
+      db.from(CONTENT_SETS[CONTENT_SET].table).update(cp).eq("id", el.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error); toast("Saved"); });
+      return;
+    }
     if(el.classList && el.classList.contains("js-disp")){
       db.from("memberships").update({ is_dispatcher: el.checked })
         .eq("id", el.getAttribute("data-id"))
@@ -1817,6 +1995,17 @@
   /* inline edits save on blur */
   document.addEventListener("blur", function(e){
     var i = e.target;
+    if(i.classList && i.classList.contains("js-cin")){
+      var set = CONTENT_SETS[CONTENT_SET];
+      var cf = i.getAttribute("data-f"), cv = i.value.trim();
+      var isNum = false;
+      set.cols.forEach(function(c){ if(c.f === cf && c.num) isNum = true; });
+      var cp = {};
+      cp[cf] = isNum ? (parseFloat(cv) || 0) : (cv || null);
+      db.from(set.table).update(cp).eq("id", i.getAttribute("data-id"))
+        .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
+      return;
+    }
     if(i.classList && i.classList.contains("js-duty")){
       db.from("memberships").update({ duty_status: i.value.trim() || null })
         .eq("id", i.getAttribute("data-id"))
