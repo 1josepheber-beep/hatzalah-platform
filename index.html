@@ -1296,6 +1296,14 @@
 
   function sbPaintOrg(){
     if(!ORG) return;
+    /* The picture built into the page is only a stand-in. An organization
+       with no logo of its own must not be shown another one's. */
+    if(!ORG.logo_path){
+      ["ogLogo","npLogo","gLogo","bioLogo","gateLogo"].forEach(function(id){
+        var el = $(id);
+        if(el){ el.removeAttribute("src"); el.style.visibility = "hidden"; }
+      });
+    }
     if(ORG.logo_path){
       ["ogLogo","npLogo"].forEach(function(id){
         var el = $(id);
@@ -1378,11 +1386,15 @@
            if the roster carries their email, otherwise waiting for an
            administrator to approve them. */
         if(!m && !tried){
-          return SB.rpc("join_org", { p_code: ORG.code }).then(function(j){
-            var res = (j.data && j.data.length) ? j.data[0] : null;
-            if(res && res.status === "error"){ return { blocked:"error", why:res.message }; }
-            return sbLoadMe(true);
-          }).catch(function(){ return null; });
+          return SB.rpc("claim_my_place").catch(function(){ return null; })
+            .then(function(c){
+              if(c && c.data && c.data.length) return sbLoadMe(true);
+              return SB.rpc("join_org", { p_code: ORG.code }).then(function(j){
+                var res = (j.data && j.data.length) ? j.data[0] : null;
+                if(res && res.status === "error"){ return { blocked:"error", why:res.message }; }
+                return sbLoadMe(true);
+              });
+            }).catch(function(){ return null; });
         }
         if(!m) return null;
         if(m.status !== "active"){

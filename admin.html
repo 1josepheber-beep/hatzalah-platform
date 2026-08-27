@@ -413,7 +413,14 @@
 
     db.auth.getUser().then(function(u){
       var uid = u && u.data && u.data.user ? u.data.user.id : null;
-      return db.from("profiles").select("is_super_admin").eq("id", uid).maybeSingle();
+      /* Someone set up as an administrator has a person record waiting but
+         no membership until they first sign in. Claim it before asking what
+         they can see, or their own organization is invisible to them. */
+      return db.rpc("claim_my_place")
+        .catch(function(){ return null; })
+        .then(function(){
+          return db.from("profiles").select("is_super_admin").eq("id", uid).maybeSingle();
+        });
     }).then(function(r){
       isSuper = !!(r.data && r.data.is_super_admin);
       $("newOrgBtn").classList.toggle("hidden", !isSuper);
