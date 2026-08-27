@@ -548,6 +548,10 @@
         +   '<button id="pp_new" class="btn primary">Add a person</button>'
         + '</div></div>';
 
+      /* Reordering while a filter is on would renumber only what you can
+         see and scramble the rest, so dragging waits until the list is whole. */
+      var filtered = (ROSTER_FILTER !== "all") || !!ROSTER_SEARCH;
+
       var shown = PEOPLE.filter(function(p){
         if(ROSTER_FILTER === "nounit"){ if(p.unit_number) return false; }
         else if(ROSTER_FILTER !== "all"){
@@ -576,9 +580,11 @@
           + '<th style="width:76px">Unit</th><th>Name</th><th>Contact</th>'
           + '<th style="width:110px">Can do</th><th>Badges</th>'
           + '<th style="width:96px">Duty</th><th style="width:88px">Signed in</th>'
-          + '</tr></thead><tbody>';
+          + '</tr></thead><tbody id="sortRows_people">';
         shown.forEach(function(p){
-          html += '<tr class="js-person" data-id="'+p.id+'" style="cursor:pointer">'
+          html += '<tr class="js-person js-sortrow"'+(filtered?"":' draggable="true"')
+            + ' data-id="'+p.id+'" style="cursor:pointer">'
+            + '<td class="draghandle" title="Drag to move">\u2630</td>'
             + '<td><b>'+esc(p.unit_number || "\u2014")+'</b></td>'
             + '<td><b>'+esc(personName(p))+'</b>'
             +   (p.entry_type && p.entry_type !== "Responder"
@@ -608,6 +614,8 @@
 
       el.innerHTML = html;
       wireMemberImport();
+      makeSortable("sortRows_people", "people", filtered
+        ? "Clear the filter and the search to drag people into a new order." : null);
       Array.prototype.forEach.call(document.querySelectorAll(".js-rfilter"), function(b){
         b.addEventListener("click", function(){
           ROSTER_FILTER = b.getAttribute("data-f"); renderMembers();
@@ -1078,11 +1086,11 @@
           + 'you press Save changes.</p>'
           + '<div class="scroller tall"><table><thead><tr>'
           + '<th style="width:44px"></th><th>Name</th><th>Opens</th><th>Target</th>'
-          + '<th>Admin only</th><th>On</th><th></th></tr></thead><tbody id="tileRows">';
+          + '<th>Admin only</th><th>On</th><th></th></tr></thead><tbody id="sortRows_tiles">';
 
         rows.forEach(function(t){
           var needsTarget = (t.kind === "link" || t.kind === "app");
-          html += '<tr draggable="true" class="js-trow" data-id="'+t.id+'">'
+          html += '<tr draggable="true" class="js-sortrow" data-id="'+t.id+'">'
             + '<td class="draghandle" title="Drag to move">\u2630</td>'
             + '<td><input class="js-t" data-id="'+t.id+'" data-f="label" value="'+esc(t.label)+'"></td>'
             + '<td><select class="js-tsel" data-id="'+t.id+'" data-f="kind">'
@@ -1111,7 +1119,7 @@
   }
 
   function wireTiles(){
-    wireTileDrag();
+    makeSortable("sortRows_tiles", "tiles");
     var add = $("nt_add");
     if(!add) return;
     add.addEventListener("click", function(){
@@ -1341,10 +1349,14 @@
           el.innerHTML = html; wireHospitalForm(); return;
         }
 
-        html += '<div class="scroller tall"><table><thead><tr><th>Name</th><th>Phone</th><th>Door</th>'
-             +  '<th>Address</th><th>Ambulance bay</th><th></th></tr></thead><tbody>';
+        html += dragHint()
+             +  '<div class="scroller tall"><table><thead><tr><th style="width:44px"></th>'
+             +  '<th>Name</th><th>Phone</th><th>Door</th>'
+             +  '<th>Address</th><th>Ambulance bay</th><th></th></tr></thead>'
+             +  '<tbody id="sortRows_hospitals">';
         rows.forEach(function(h){
-          html += '<tr>'
+          html += '<tr draggable="true" class="js-sortrow" data-id="'+h.id+'">'
+            + '<td class="draghandle" title="Drag to move">\u2630</td>'
             + '<td><input class="js-h" data-id="'+h.id+'" data-f="name" value="'+esc(h.name)+'"></td>'
             + '<td><input class="js-h" data-id="'+h.id+'" data-f="phone_call" value="'+esc(h.phone_call||"")+'" placeholder="\u2014"></td>'
             + '<td><input class="js-h" data-id="'+h.id+'" data-f="door_code" value="'+esc(h.door_code||"")+'" placeholder="\u2014" style="width:90px"></td>'
@@ -1360,6 +1372,7 @@
              +  '<p class="hint" style="margin-top:12px">Edits save when you click out of a box.</p></div>';
         el.innerHTML = html;
         wireHospitalForm();
+        makeSortable("sortRows_hospitals", "hospitals");
       }).catch(function(e){
         el.innerHTML = '<div class="card"><div class="err">'+esc(e.message||"Could not load hospitals")+'</div></div>';
       });
@@ -1741,21 +1754,39 @@
   }
 
 
-  /* Dragging a row changes the order it will be saved in. The numbers are
-     an implementation detail nobody should have to type. */
-  function wireTileDrag(){
-    var body = $("tileRows");
+  /* Dragging a row changes the order it will be saved in. Nobody should
+     have to type numbers to say what comes first.
+
+     One rule: dragging is switched off while a filter or a search is on,
+     because reordering three visible rows out of forty would quietly
+     scramble the rest. */
+  function makeSortable(bodyId, table, disabledReason){
+    var body = $(bodyId);
     if(!body) return;
+
+    var rows = body.querySelectorAll(".js-sortrow");
+    if(disabledReason){
+      Array.prototype.forEach.call(rows, function(tr){
+        tr.removeAttribute("draggable");
+        var h = tr.querySelector(".draghandle");
+        if(h){ h.textContent = "\u00B7"; h.title = disabledReason; h.style.cursor = "default"; }
+      });
+      return;
+    }
+
     var dragging = null;
 
-    Array.prototype.forEach.call(body.querySelectorAll(".js-trow"), function(tr){
+    Array.prototype.forEach.call(rows, function(tr){
       tr.addEventListener("dragstart", function(e){
         dragging = tr; tr.classList.add("dragging");
-        try{ e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain",""); }catch(x){}
+        try{
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", "");
+        }catch(x){}
       });
       tr.addEventListener("dragend", function(){
         tr.classList.remove("dragging");
-        Array.prototype.forEach.call(body.querySelectorAll(".js-trow"), function(r){
+        Array.prototype.forEach.call(body.querySelectorAll(".js-sortrow"), function(r){
           r.classList.remove("dragover");
         });
         dragging = null;
@@ -1773,10 +1804,18 @@
     });
 
     function restack(){
-      Array.prototype.forEach.call(body.querySelectorAll(".js-trow"), function(tr, i){
-        markEdit("tiles", tr.getAttribute("data-id"), "sort_order", (i + 1) * 10);
+      Array.prototype.forEach.call(body.querySelectorAll(".js-sortrow"), function(tr, i){
+        markEdit(table, tr.getAttribute("data-id"), "sort_order", (i + 1) * 10);
       });
     }
+  }
+
+  function dragHint(disabled){
+    return '<p class="hint">'
+      + (disabled ? disabled
+                  : "Drag a row by the handle to move it. Nothing is saved until you press "
+                    + "Save changes.")
+      + '</p>';
   }
 
   /* ================= IMAGES ================= */
@@ -2755,13 +2794,12 @@
           + '<th style="width:56px">#</th><th>Name</th><th style="width:180px">Tracked as</th>'
           + '<th style="width:150px">Issued by</th><th style="width:120px">Valid (months)</th>'
           + '<th style="width:110px">Warn (days)</th><th style="width:80px">Required</th>'
-          + '<th style="width:60px">On</th><th></th></tr></thead><tbody>';
+          + '<th style="width:60px">On</th><th></th></tr></thead><tbody id="sortRows_certtypes">';
 
         rows.forEach(function(t){
           var dated = t.tracking !== "completion";
-          html += '<tr>'
-            + '<td><input class="js-ct" data-id="'+t.id+'" data-f="sort_order" '
-            +   'value="'+esc(t.sort_order)+'" inputmode="decimal" style="width:48px"></td>'
+          html += '<tr draggable="true" class="js-sortrow" data-id="'+t.id+'">'
+            + '<td class="draghandle" title="Drag to move">\u2630</td>'
             + '<td><input class="js-ct" data-id="'+t.id+'" data-f="name" value="'+esc(t.name)+'"></td>'
             + '<td><select class="js-ctsel" data-id="'+t.id+'" data-f="tracking">'
             +   '<option value="expiry"'+(dated?" selected":"")+'>Expires on a date</option>'
@@ -2784,6 +2822,7 @@
         });
         html += '</tbody></table></div></div>';
         el.innerHTML = html;
+        makeSortable("sortRows_certtypes", "certification_types");
 
         $("nc_add").addEventListener("click", function(){
           var nm = $("nc_name").value.trim();
@@ -2917,13 +2956,17 @@
           el.innerHTML = html; wireContent(); return;
         }
 
-        html += '<div class="scroller tall"><table><thead><tr>'
-          + set.cols.map(function(c){
+        html += dragHint()
+          + '<div class="scroller tall"><table><thead><tr>'
+          + '<th style="width:44px"></th>'
+          + set.cols.filter(function(c){ return c.f !== "sort_order"; }).map(function(c){
               return '<th'+(c.w?' style="width:'+c.w+'"':'')+'>'+esc(c.l)+'</th>'; }).join("")
-          + '<th></th></tr></thead><tbody>';
+          + '<th></th></tr></thead><tbody id="sortRows_content">';
 
         rows.forEach(function(row){
-          html += '<tr>' + set.cols.map(function(c){
+          html += '<tr draggable="true" class="js-sortrow" data-id="'+row.id+'">'
+            + '<td class="draghandle" title="Drag to move">\u2630</td>'
+            + set.cols.filter(function(c){ return c.f !== "sort_order"; }).map(function(c){
             if(c.bool){
               return '<td style="text-align:center"><input type="checkbox" class="js-cbool" '
                 + 'data-id="'+row.id+'" data-f="'+c.f+'" '+(row[c.f]?"checked":"")+'></td>';
@@ -2937,6 +2980,7 @@
         html += '</tbody></table></div></div>';
         el.innerHTML = html;
         wireContent();
+        makeSortable("sortRows_content", set.table);
       }).catch(function(e){
         el.innerHTML = picker + '<div class="card"><div class="err">'
           + esc(e.message||"Could not load") + '</div></div>';
@@ -3284,7 +3328,11 @@
       return;
     }
     var pr = t.closest(".js-person");
-    if(pr){ openPerson(pr.getAttribute("data-id")); return; }
+    if(pr){
+      if(t.classList && t.classList.contains("draghandle")) return;
+      openPerson(pr.getAttribute("data-id"));
+      return;
+    }
 
     var cell = t.closest(".js-cell");
     if(cell){ openCertCell(cell); return; }
