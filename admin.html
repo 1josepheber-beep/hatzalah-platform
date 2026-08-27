@@ -221,7 +221,8 @@
   <header>
     <h1>Admin</h1>
     <select id="orgPick"></select>
-    <button id="newOrgBtn" class="btn hidden">New organization</button>
+    <button id="whoBtn" class="btn">Check my account</button>
+  <button id="newOrgBtn" class="btn hidden">New organization</button>
     <button id="signout" class="btn">Sign out</button>
   </header>
   <nav>
@@ -4021,6 +4022,45 @@
      waiting for them. */
 
   $("newOrgBtn").addEventListener("click", openNewOrg);
+
+  /* When the page and the database disagree about who you are, this says
+     which one is wrong. The page decides what to show from your profile;
+     the database decides what to allow from the same row, read as you. */
+  $("whoBtn").addEventListener("click", function(){
+    db.rpc("whoami").then(function(r){
+      var w = (r.data && r.data.length) ? r.data[0] : null;
+      var scrim = document.createElement("div");
+      scrim.className = "scrim";
+      scrim.innerHTML = '<div class="sheet">'
+        + '<h2 style="margin:0 0 10px">What the database sees</h2>'
+        + (r.error
+            ? '<div class="err">' + esc(r.error.message) + '</div>'
+              + '<p class="hint">If it says the function does not exist, file 26 has not been '
+              + 'run yet.</p>'
+            : (!w || !w.signed_in_as
+                ? '<div class="err">No signed-in account. Sign out and sign in again.</div>'
+                : '<div class="srow"><label>Signed in as</label><div class="val">'
+                  + esc(w.email || "(no email on the profile)") + '</div></div>'
+                  + '<div class="srow"><label>Super-admin</label><div class="val">'
+                  + (w.is_super_admin
+                      ? '<span class="pill active">yes</span>'
+                      : '<span class="pill pending">no</span>') + '</div></div>'
+                  + '<div class="srow"><label>Organizations</label><div class="val">'
+                  + (w.org_count || 0) + '</div></div>'
+                  + '<div class="srow"><label>Administrator of</label><div class="val">'
+                  + esc(w.admin_of || "\u2014") + '</div></div>'
+                  + (w.is_super_admin
+                      ? '<p class="hint">You can create organizations.</p>'
+                      : '<div class="warn">This account is not marked as a super-admin, so it '
+                        + 'cannot create organizations. Run file 26 step 2 with '
+                        + '<b>' + esc(w.email || "your email") + '</b>.</div>')))
+        + '<div class="row" style="margin-top:14px">'
+        + '<button id="who_close" class="btn primary">Close</button></div></div>';
+      document.body.appendChild(scrim);
+      scrim.addEventListener("click", function(e){ if(e.target === scrim) scrim.remove(); });
+      $("who_close").addEventListener("click", function(){ scrim.remove(); });
+    }).catch(oops);
+  });
 
   function openNewOrg(){
     var scrim = document.createElement("div");
