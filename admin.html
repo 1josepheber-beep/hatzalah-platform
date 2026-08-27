@@ -222,6 +222,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -782,7 +783,16 @@
                 + '</td></tr>';
             }).join("")
           + '</tbody></table></div>'
+          + '<div class="row" style="margin-top:14px">'
+          +   '<button id="pp_export" class="btn primary">Download their whole file</button>'
+          +   '<span class="small">Everything on this page plus every document, as one zip</span>'
+          + '</div>'
+          + '<div id="pp_expout" class="mono" style="margin-top:8px"></div>'
           + '<p class="hint" style="margin-top:12px">Changes save when you click out of a box.</p>';
+
+        $("pp_export").addEventListener("click", function(){
+          exportPerson(p, types, have);
+        });
 
         Array.prototype.forEach.call(scrim.querySelectorAll(".js-pdone"), function(cb){
           cb.addEventListener("change", function(){
@@ -2203,6 +2213,8 @@
         CERT_FILTER = b.getAttribute("data-f"); renderCerts();
       });
     });
+    var ce = $("cert_export");
+    if(ce) ce.addEventListener("click", exportAllCerts);
     var cs = $("csearch");
     if(cs) cs.addEventListener("input", function(){
       clearTimeout(window.__cst);
@@ -2330,6 +2342,190 @@
       db.rpc("review_certification", { p_cert:mid, p_approve:false, p_reason:why })
         .then(function(r){ if(r.error) return oops(r.error);
                            close(); toast("Rejected"); renderCerts(); }).catch(oops);
+    });
+  }
+
+  /* ---------- everything about one person, in one zip ----------
+     When an auditor asks for a responder's file, nobody should be clicking
+     through fourteen certifications downloading them one at a time. This
+     collects the summary and every document into a single zip. */
+
+  function exportPerson(p, types, have){
+    var btn = $("pp_export"), out = $("pp_expout");
+    btn.disabled = true; btn.textContent = "Collecting\u2026";
+
+    var name = ((p.first_name||"") + " " + (p.last_name||"")).trim() || "person";
+    var safe = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    var today = new Date().toISOString().slice(0,10);
+    var zip = new JSZip();
+    var folder = zip.folder(safe + "-" + (p.unit_number || "no-unit"));
+
+    // 1. a readable summary
+    var lines = [];
+    lines.push("CERTIFICATION FILE");
+    lines.push("Produced " + today);
+    lines.push("");
+    lines.push("Name          " + name);
+    lines.push("Unit          " + (p.unit_number || "-"));
+    lines.push("Badge         " + (p.badge_number || "-"));
+    lines.push("Type          " + (p.entry_type || "-"));
+    lines.push("Level         " + (p.level || "-"));
+    lines.push("Role          " + (p.role || "-"));
+    lines.push("Badges        " + ((p.badges||[]).join(", ") || "-"));
+    lines.push("Duty          " + (p.duty_status || "-"));
+    lines.push("Email         " + (p.email || "-"));
+    lines.push("Phone         " + (p.phone || "-"));
+    lines.push("Status        " + (p.status || "-"));
+    lines.push("");
+    lines.push("CERTIFICATIONS");
+    lines.push("");
+
+    var csv = [["Certification","Tracked as","Required","Expires","Completed",
+                "Number","State","Document"]];
+
+    types.forEach(function(t){
+      var h = have[t.id];
+      var st = certState(h && h.expires_on, t.warn_days_before, t.tracking, h);
+      var stateWord = { ok:"in date", soon:"expiring soon", expired:"EXPIRED",
+                        missing:"nothing on file" }[st.k] || st.k;
+      var docName = "";
+      if(h && h.file_path) docName = String(h.file_path).split("/").pop();
+
+      var label = t.name;
+      while(label.length < 30) label += " ";
+      lines.push("  " + label
+        + (t.tracking === "completion"
+            ? ((h && h.completed) ? "completed " + (h.completed_on || "") : "NOT COMPLETED")
+            : ((h && h.expires_on) ? "expires " + h.expires_on : "nothing on file"))
+        + (t.is_required ? "   [required]" : "")
+        + (docName ? "   -> " + docName : ""));
+
+      csv.push([t.name,
+                t.tracking === "completion" ? "done or not done" : "expires on a date",
+                t.is_required ? "yes" : "no",
+                (h && h.expires_on) || "",
+                (h && h.completed) ? ((h.completed_on) || "yes") : "",
+                (h && h.credential_number) || "",
+                stateWord, docName]);
+    });
+
+    lines.push("");
+    lines.push("Documents are in the documents folder alongside this file.");
+    folder.file("summary.txt", lines.join("\n"));
+    folder.file("certifications.csv", csv.map(function(r){
+      return r.map(function(c){
+        c = String(c == null ? "" : c);
+        return /[",\n]/.test(c) ? '"' + c.replace(/"/g,'""') + '"' : c;
+      }).join(",");
+    }).join("\r\n"));
+
+    // 2. every document, fetched one at a time
+    var docs = types.filter(function(t){ return have[t.id] && have[t.id].file_path; });
+    var got = 0, failed = [];
+
+    function next(i){
+      if(i >= docs.length) return finish();
+      var t = docs[i], path = have[t.id].file_path;
+      out.textContent = "Document " + (i+1) + " of " + docs.length + "\u2026";
+      db.storage.from("member-docs").createSignedUrl(path, 300).then(function(r){
+        if(r.error || !r.data) throw new Error("no link");
+        return fetch(r.data.signedUrl);
+      }).then(function(res){
+        if(!res.ok) throw new Error("could not fetch");
+        return res.blob();
+      }).then(function(blob){
+        var ext = (String(path).split(".").pop() || "pdf").toLowerCase();
+        var clean = t.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+        folder.folder("documents").file(clean + "." + ext, blob);
+        got++;
+        next(i+1);
+      }).catch(function(){
+        failed.push(t.name);
+        next(i+1);
+      });
+    }
+
+    function finish(){
+      if(failed.length){
+        folder.file("missing-documents.txt",
+          "These had a document on file that could not be downloaded:\n\n"
+          + failed.join("\n"));
+      }
+      out.textContent = "Building the zip\u2026";
+      zip.generateAsync({ type:"blob" }).then(function(blob){
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = safe + "-file-" + today + ".zip";
+        document.body.appendChild(a); a.click();
+        setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 800);
+        btn.disabled = false; btn.textContent = "Download their whole file";
+        out.textContent = got + " document" + (got===1?"":"s") + " included"
+          + (failed.length ? ", " + failed.length + " could not be fetched" : "");
+      }).catch(function(e){
+        btn.disabled = false; btn.textContent = "Download their whole file";
+        out.textContent = "Could not build the zip: " + ((e && e.message) || "");
+      });
+    }
+
+    next(0);
+  }
+
+  /* ---------- the whole roster, for a wider audit ---------- */
+  function exportAllCerts(){
+    var btn = $("cert_export");
+    btn.disabled = true; btn.textContent = "Collecting\u2026";
+
+    Promise.all([
+      db.from("people").select("*").eq("org_id", orgId).order("unit_number"),
+      db.from("certification_types").select("*")
+        .eq("org_id", orgId).eq("is_active", true).order("sort_order"),
+      db.from("roster_certifications").select("*").eq("org_id", orgId)
+    ]).then(function(r){
+      var people = r[0].data || [], types = r[1].data || [], certs = r[2].data || [];
+      var held = {};
+      certs.forEach(function(c){
+        held[(c.unit_number||"").toLowerCase() + "|" + c.cert_type_id] = c;
+      });
+
+      var head = ["Unit","Name","Type","Level","Role","Duty","Status"];
+      types.forEach(function(t){ head.push(t.name); head.push(t.name + " number"); });
+      var rows = [head];
+
+      people.forEach(function(p){
+        var line = [p.unit_number || "",
+                    ((p.first_name||"") + " " + (p.last_name||"")).trim(),
+                    p.entry_type || "", p.level || "", p.role || "",
+                    p.duty_status || "", p.status || ""];
+        types.forEach(function(t){
+          var h = held[(p.unit_number||"").toLowerCase() + "|" + t.id];
+          if(t.tracking === "completion"){
+            line.push(h && h.completed ? ("completed " + (h.completed_on||"")) : "");
+          } else {
+            line.push((h && h.expires_on) || "");
+          }
+          line.push((h && h.credential_number) || "");
+        });
+        rows.push(line);
+      });
+
+      var csv = rows.map(function(rr){
+        return rr.map(function(c){
+          c = String(c == null ? "" : c);
+          return /[",\n]/.test(c) ? '"' + c.replace(/"/g,'""') + '"' : c;
+        }).join(",");
+      }).join("\r\n");
+
+      var blob = new Blob(["\ufeff" + csv], { type:"text/csv;charset=utf-8;" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "certifications-" + new Date().toISOString().slice(0,10) + ".csv";
+      document.body.appendChild(a); a.click();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 800);
+      btn.disabled = false; btn.textContent = "Download the whole grid";
+      toast("Downloaded " + people.length + " people");
+    }).catch(function(e){
+      btn.disabled = false; btn.textContent = "Download the whole grid";
+      oops(e);
     });
   }
 
