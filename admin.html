@@ -79,6 +79,19 @@
   .warn{background:#FFF8E6;border:1px solid #E8CE86;color:#6B520C;
     padding:10px 12px;border-radius:9px;font-size:13.5px;margin-bottom:13px}
   .empty{text-align:center;color:var(--muted);padding:30px}
+  .steps{display:flex;flex-direction:column;gap:14px;margin-bottom:4px}
+  .step{display:flex;gap:12px;align-items:flex-start}
+  .step .n{flex:none;width:26px;height:26px;border-radius:50%;background:var(--brand);
+    color:#fff;display:flex;align-items:center;justify-content:center;
+    font-size:13px;font-weight:700}
+  .linklike{background:none;border:0;color:var(--brand);text-decoration:underline;
+    padding:0;cursor:pointer;font-size:13px}
+  .maprow{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center;
+    padding:8px 0;border-bottom:1px solid var(--line)}
+  .maprow:last-of-type{border-bottom:0}
+  .maprow .arrow{color:var(--muted)}
+  .maprow .yours{font-weight:600;word-break:break-word}
+  .maprow .sample{font-size:12px;color:var(--muted);font-weight:400}
   .switch{display:flex;align-items:center;justify-content:space-between;gap:12px;
     padding:11px 0;border-bottom:1px solid var(--line)}
   .switch:last-child{border-bottom:0}
@@ -129,6 +142,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -317,19 +331,28 @@
         var gaps = rows.filter(function(h){ return !h.phone_call || !h.address; }).length;
         var noCoords = rows.filter(function(h){ return !h.lat || !h.lng; }).length;
 
-        var html = '<div class="card"><h2>Import from a spreadsheet</h2>'
-          + '<p class="hint">Select your rows in Excel or Google Sheets \u2014 including the header '
-          + 'row \u2014 copy, and paste below. Columns are matched by their headings.</p>'
-          + '<p class="hint"><b>Recognised headings:</b> Hospital Name, Phone (Call), Red Phone, '
-          + 'Address, Door Code, Latitude, Longitude. Any other column that contains an X is '
-          + 'treated as a specialty, so tick-box columns like Trauma III or Burn come across '
-          + 'as they are. A column named Hide skips those rows.</p>'
-          + '<div class="f"><textarea id="imp_data" rows="6" placeholder="Paste here"></textarea></div>'
-          + '<label class="row" style="margin-bottom:12px"><input type="checkbox" id="imp_replace" '
-          + 'style="width:auto"> <span>Replace the current list instead of adding to it</span></label>'
-          + '<div class="row"><button id="imp_check" class="btn">Check it</button>'
-          + '<button id="imp_go" class="btn primary hidden">Import</button></div>'
-          + '<div id="imp_out" style="margin-top:13px"></div></div>'
+        var html = '<div class="card"><h2>Import your hospital list</h2>'
+          + '<p class="hint">Upload a spreadsheet. If your headings are different from ours you '
+          + 'can match them up on the next step \u2014 you do not need to reformat anything.</p>'
+          + '<div class="steps">'
+          +   '<div class="step"><span class="n">1</span><div>'
+          +     '<b>Start from our template</b><div class="small">Optional. Already have a list? '
+          +     'Skip straight to step 2.</div>'
+          +     '<button id="imp_tpl" class="btn" style="margin-top:8px">Download template (.csv)</button>'
+          +   '</div></div>'
+          +   '<div class="step"><span class="n">2</span><div>'
+          +     '<b>Upload your file</b><div class="small">Excel (.xlsx) or .csv</div>'
+          +     '<input id="imp_file" type="file" accept=".csv,.xlsx,.xls" style="margin-top:8px">'
+          +     '<div class="small" style="margin-top:6px">'
+          +       '<button id="imp_paste_toggle" class="linklike">or paste from the clipboard instead</button>'
+          +     '</div>'
+          +     '<div id="imp_paste_wrap" class="hidden" style="margin-top:8px">'
+          +       '<textarea id="imp_data" rows="5" placeholder="Paste rows including the heading row"></textarea>'
+          +       '<button id="imp_paste_go" class="btn" style="margin-top:8px">Use this</button>'
+          +     '</div>'
+          +   '</div></div>'
+          + '</div>'
+          + '<div id="imp_out"></div></div>'
 
           + '<div class="card"><h2>Add a hospital</h2>'
           + '<p class="hint">Only the name is required. Everything else can be filled in later.</p>'
@@ -388,153 +411,303 @@
       });
   }
 
-  var IMPORT_READY = null;
+  /* ================= IMPORTING A HOSPITAL LIST =================
+     Three steps: pick a file, confirm which of their columns means what,
+     then import. The middle step is the important one - most people
+     already have a list and should not have to rebuild it to match us. */
 
-  var FIELD_ALIASES = {
-    name:       ["hospital name","name","hospital"],
-    phone_call: ["phone (call)","phone call","phone","main phone","telephone"],
-    phone_red:  ["red phone","redphone","red"],
-    address:    ["address (navigate)","address","street address","location"],
-    door_code:  ["door code","doorcode","door","entry code","keypad"],
-    lat:        ["latitude","lat"],
-    lng:        ["longitude","lng","long","lon"]
-  };
-  var IGNORE = ["code","specialties (summary)","specialties","summary","notes",""];
+  var IMP = null;   // { headers, rows, mapping }
 
-  function normHeader(h){ return String(h||"").trim().toLowerCase(); }
+  var OUR_FIELDS = [
+    { key:"name",       label:"Hospital name", required:true,
+      aliases:["hospital name","name","hospital","facility","facility name"] },
+    { key:"phone_call", label:"Phone number",
+      aliases:["phone (call)","phone call","phone","main phone","telephone","tel","contact"] },
+    { key:"phone_red",  label:"Red phone",
+      aliases:["red phone","redphone","red","direct line","er phone"] },
+    { key:"address",    label:"Address",
+      aliases:["address (navigate)","address","street address","location","street"] },
+    { key:"door_code",  label:"Door code",
+      aliases:["door code","doorcode","door","entry code","keypad","access code"] },
+    { key:"lat",        label:"Latitude (ambulance bay)",
+      aliases:["latitude","lat"] },
+    { key:"lng",        label:"Longitude (ambulance bay)",
+      aliases:["longitude","lng","long","lon"] }
+  ];
+  var SKIP_HEADERS = ["code","specialties (summary)","specialties","summary","notes"];
 
-  function matchField(header){
-    var h = normHeader(header);
-    for(var f in FIELD_ALIASES){
-      if(FIELD_ALIASES[f].indexOf(h) > -1) return f;
-    }
-    return null;
+  function norm(h){ return String(h||"").trim().toLowerCase(); }
+
+  function autoMap(headers, rows){
+    return headers.map(function(h, i){
+      var n = norm(h);
+      if(!n) return "ignore";
+      if(n === "hide") return "hide";
+      if(SKIP_HEADERS.indexOf(n) > -1) return "ignore";
+      for(var f=0; f<OUR_FIELDS.length; f++){
+        if(OUR_FIELDS[f].aliases.indexOf(n) > -1) return OUR_FIELDS[f].key;
+      }
+      // a column of X marks is almost always a capability tick-box
+      var ticks = 0, filled = 0;
+      for(var r=0; r<rows.length; r++){
+        var v = String(rows[r][i] == null ? "" : rows[r][i]).trim().toUpperCase();
+        if(!v) continue;
+        filled++;
+        if(v === "X" || v === "YES" || v === "TRUE" || v === "1") ticks++;
+      }
+      if(filled && ticks === filled) return "specialty";
+      return "ignore";
+    });
   }
 
-  function parsePaste(text){
-    var lines = text.replace(/\r/g,"").split("\n").filter(function(l){ return l.trim() !== ""; });
-    if(lines.length < 2) return { error:"Paste at least a header row and one hospital." };
-    var sep = lines[0].indexOf("\t") > -1 ? "\t" : ",";
-    var headers = lines[0].split(sep).map(function(h){ return h.trim().replace(/^"|"$/g,""); });
+  function loadTable(headers, rows){
+    headers = headers.map(function(h){ return String(h == null ? "" : h).trim(); });
+    rows = rows.filter(function(r){
+      return r.some(function(c){ return String(c == null ? "" : c).trim() !== ""; });
+    });
+    if(!rows.length){
+      $("imp_out").innerHTML = '<div class="err">That file has headings but no rows.</div>';
+      return;
+    }
+    IMP = { headers:headers, rows:rows, mapping:autoMap(headers, rows) };
+    renderMapping();
+  }
 
-    var map = {}, specCols = [], hideCol = -1;
-    headers.forEach(function(h, i){
-      var n = normHeader(h);
-      if(n === "hide"){ hideCol = i; return; }
-      if(IGNORE.indexOf(n) > -1) return;
-      var f = matchField(h);
-      if(f){ map[f] = i; return; }
-      if(h) specCols.push({ index:i, label:h });
+  function renderMapping(){
+    var opts = function(sel){
+      var o = '<option value="ignore"'+(sel==="ignore"?" selected":"")+'>Do not import</option>'
+            + '<option value="specialty"'+(sel==="specialty"?" selected":"")+'>A specialty (X = has it)</option>'
+            + '<option value="hide"'+(sel==="hide"?" selected":"")+'>Hide row when marked X</option>';
+      OUR_FIELDS.forEach(function(f){
+        o += '<option value="'+f.key+'"'+(sel===f.key?" selected":"")+'>'+esc(f.label)+'</option>';
+      });
+      return o;
+    };
+
+    var hasName = IMP.mapping.indexOf("name") > -1;
+    var used = {};
+    IMP.mapping.forEach(function(m){ if(m !== "ignore" && m !== "specialty") used[m] = (used[m]||0)+1; });
+    var dupes = Object.keys(used).filter(function(k){ return used[k] > 1; });
+
+    var html = '<div class="card"><h2>Check the columns</h2>'
+      + '<p class="hint">We have guessed what each of your columns means. Change anything we got '
+      + 'wrong. Columns set to \u201Cdo not import\u201D are simply left out.</p>';
+
+    if(!hasName){
+      html += '<div class="err">One column must be set to <b>Hospital name</b> before you can import.</div>';
+    }
+    if(dupes.length){
+      html += '<div class="err">Two columns are both set to the same thing. Each of ours can only be used once.</div>';
+    }
+
+    html += '<div class="maprow"><b class="small">YOUR COLUMN</b><span></span><b class="small">MEANS</b></div>';
+
+    IMP.headers.forEach(function(h, i){
+      var sample = "";
+      for(var r=0; r<IMP.rows.length && !sample; r++){
+        sample = String(IMP.rows[r][i] == null ? "" : IMP.rows[r][i]).trim();
+      }
+      html += '<div class="maprow">'
+        + '<div class="yours">'+esc(h || "(no heading)")
+        +   (sample ? '<div class="sample">e.g. '+esc(sample.slice(0,40))+'</div>' : '')
+        + '</div>'
+        + '<span class="arrow">\u2192</span>'
+        + '<select class="js-map" data-i="'+i+'">'+opts(IMP.mapping[i])+'</select>'
+        + '</div>';
     });
 
-    if(map.name === undefined) return { error:"No column named Hospital Name was found." };
+    html += '<div class="row" style="margin-top:16px">'
+      + '<button id="imp_preview" class="btn primary"'+((!hasName||dupes.length)?" disabled":"")+'>'
+      + 'Preview import</button>'
+      + '<button id="imp_cancel" class="btn">Start over</button></div></div>';
 
-    var rows = [], skipped = 0;
-    for(var i=1;i<lines.length;i++){
-      var cells = lines[i].split(sep).map(function(c){ return c.trim().replace(/^"|"$/g,""); });
-      if(hideCol > -1 && (cells[hideCol]||"").toUpperCase() === "X"){ skipped++; continue; }
-      var name = cells[map.name];
-      if(!name){ skipped++; continue; }
+    $("imp_out").innerHTML = html;
+  }
+
+  function buildRows(){
+    var map = {}, specCols = [], hideCol = -1;
+    IMP.mapping.forEach(function(m, i){
+      if(m === "ignore") return;
+      if(m === "specialty"){ specCols.push({ i:i, label:IMP.headers[i] }); return; }
+      if(m === "hide"){ hideCol = i; return; }
+      map[m] = i;
+    });
+
+    var out = [], skipped = 0;
+    IMP.rows.forEach(function(cells, n){
+      var cell = function(i){
+        return i === undefined ? "" : String(cells[i] == null ? "" : cells[i]).trim();
+      };
+      if(hideCol > -1 && cell(hideCol).toUpperCase() === "X"){ skipped++; return; }
+      var name = cell(map.name);
+      if(!name){ skipped++; return; }
 
       var specs = [];
       specCols.forEach(function(sc){
-        var v = (cells[sc.index]||"").trim().toUpperCase();
+        var v = cell(sc.i).toUpperCase();
         if(v === "X" || v === "YES" || v === "TRUE" || v === "1") specs.push(sc.label);
       });
 
-      var lat = map.lat !== undefined ? parseFloat(cells[map.lat]) : NaN;
-      var lng = map.lng !== undefined ? parseFloat(cells[map.lng]) : NaN;
-
-      rows.push({
-        org_id: orgId,
-        name: name,
-        phone_call: map.phone_call !== undefined ? (cells[map.phone_call]||null) : null,
-        phone_red:  map.phone_red  !== undefined ? (cells[map.phone_red] ||null) : null,
-        address:    map.address    !== undefined ? (cells[map.address]   ||null) : null,
-        door_code:  map.door_code  !== undefined ? (cells[map.door_code] ||null) : null,
+      var lat = parseFloat(cell(map.lat)), lng = parseFloat(cell(map.lng));
+      out.push({
+        org_id: orgId, name: name,
+        phone_call: cell(map.phone_call) || null,
+        phone_red:  cell(map.phone_red)  || null,
+        address:    cell(map.address)    || null,
+        door_code:  cell(map.door_code)  || null,
         lat: isNaN(lat) ? null : lat,
         lng: isNaN(lng) ? null : lng,
         specialties: specs,
-        sort_order: i * 10
+        sort_order: (n + 1) * 10
       });
-    }
-
-    return { rows:rows, skipped:skipped, matched:Object.keys(map),
+    });
+    return { rows:out, skipped:skipped,
              specCols:specCols.map(function(c){ return c.label; }) };
   }
 
+  function renderPreview(){
+    var b = buildRows();
+    if(!b.rows.length){
+      $("imp_out").innerHTML = '<div class="card"><div class="err">No usable rows. '
+        + 'Check that the Hospital name column is the right one.</div>'
+        + '<button id="imp_cancel" class="btn" style="margin-top:12px">Start over</button></div>';
+      return;
+    }
+    IMP.ready = b.rows;
+
+    var coords = b.rows.filter(function(x){ return x.lat && x.lng; }).length;
+    var phones = b.rows.filter(function(x){ return x.phone_call; }).length;
+
+    $("imp_out").innerHTML = '<div class="card"><h2>Ready to import</h2>'
+      + '<div class="warn"><b>'+b.rows.length+' hospitals.</b><br>'
+      +   phones+' with a phone number, '+coords+' with ambulance bay coordinates.'
+      +   (b.specCols.length ? '<br>Specialties: '+esc(b.specCols.join(", ")) : '')
+      +   (b.skipped ? '<br>'+b.skipped+' rows left out (hidden or no name).' : '')
+      + '</div>'
+      + '<div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Phone</th><th>Door</th>'
+      +   '<th>Bay coords</th><th>Specialties</th></tr></thead><tbody>'
+      + b.rows.slice(0,6).map(function(x){
+          return '<tr><td>'+esc(x.name)+'</td><td>'+esc(x.phone_call||"\u2014")+'</td>'
+            + '<td>'+esc(x.door_code||"\u2014")+'</td>'
+            + '<td>'+(x.lat&&x.lng?"yes":"\u2014")+'</td>'
+            + '<td class="small">'+esc(x.specialties.join(", ")||"\u2014")+'</td></tr>';
+        }).join("")
+      + '</tbody></table></div>'
+      + (b.rows.length>6 ? '<p class="hint">First 6 of '+b.rows.length+'.</p>' : '')
+      + '<label class="row" style="margin:14px 0"><input type="checkbox" id="imp_replace" '
+      +   'style="width:auto"> <span>Replace the current list instead of adding to it</span></label>'
+      + '<div class="row"><button id="imp_go" class="btn primary">Import '+b.rows.length+' hospitals</button>'
+      + '<button id="imp_back" class="btn">Back to columns</button></div></div>';
+  }
+
+  function doImport(){
+    var go = $("imp_go");
+    var replace = $("imp_replace") && $("imp_replace").checked;
+    if(replace && !confirm("This deletes every hospital currently in this organization, then "
+        + "imports " + IMP.ready.length + ". Continue?")) return;
+
+    go.disabled = true; go.textContent = "Importing\u2026";
+    var step = replace ? db.from("hospitals").delete().eq("org_id", orgId)
+                       : Promise.resolve({ error:null });
+
+    step.then(function(d){
+      if(d && d.error) throw d.error;
+      return db.from("hospitals").insert(IMP.ready);
+    }).then(function(r){
+      if(r.error) throw r.error;
+      var names = {};
+      IMP.ready.forEach(function(x){ x.specialties.forEach(function(sp){ names[sp] = 1; }); });
+      var list = Object.keys(names);
+      if(!list.length) return { error:null };
+      return db.from("hospital_specialties").upsert(
+        list.map(function(n, i){
+          return { org_id:orgId, name:n, label:n, is_key:true, sort_order:(i+1)*10 };
+        }), { onConflict:"org_id,name", ignoreDuplicates:true });
+    }).then(function(r){
+      if(r && r.error) throw r.error;
+      toast("Imported " + IMP.ready.length + " hospitals");
+      IMP = null;
+      renderHospitals();
+    }).catch(function(e){
+      go.disabled = false; go.textContent = "Import";
+      $("imp_out").innerHTML = '<div class="card"><div class="err">'
+        + esc(e.message || "Import failed") + '</div>'
+        + '<button id="imp_cancel" class="btn" style="margin-top:12px">Start over</button></div>';
+    });
+  }
+
+  function downloadTemplate(){
+    var headers = ["Hospital Name","Phone (Call)","Red Phone","Address","Door Code",
+                   "Latitude","Longitude","Trauma","Stroke","Cardiac","Paediatric"];
+    var examples = [
+      ["Example General Hospital","713-555-1000","713-555-1911",
+       "100 Main Street, Yourtown","4412#","29.709600","-95.397100","X","X","X",""],
+      ["Example Children's Hospital","713-555-2000","",
+       "200 Second Street, Yourtown","","","","","","","X"]
+    ];
+    var csv = [headers].concat(examples).map(function(r){
+      return r.map(function(c){
+        return /[",\n]/.test(c) ? '"'+String(c).replace(/"/g,'""')+'"' : c;
+      }).join(",");
+    }).join("\r\n");
+
+    var blob = new Blob(["\ufeff" + csv], { type:"text/csv;charset=utf-8;" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "hospital-list-template.csv";
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    toast("Template downloaded");
+  }
+
+  function readFile(file){
+    $("imp_out").innerHTML = '<div class="card"><div class="empty">Reading '
+      + esc(file.name) + '\u2026</div></div>';
+    var fr = new FileReader();
+    fr.onerror = function(){
+      $("imp_out").innerHTML = '<div class="card"><div class="err">Could not read that file.</div></div>';
+    };
+    fr.onload = function(e){
+      try{
+        var wb = XLSX.read(e.target.result, { type:"array" });
+        var sheet = wb.Sheets[wb.SheetNames[0]];
+        var grid = XLSX.utils.sheet_to_json(sheet, { header:1, blankrows:false, defval:"" });
+        if(!grid.length){ throw new Error("That file looks empty."); }
+        loadTable(grid[0], grid.slice(1));
+      }catch(err){
+        $("imp_out").innerHTML = '<div class="card"><div class="err">'
+          + esc(err.message || "Could not understand that file.")
+          + ' Try saving it as .csv and uploading again.</div></div>';
+      }
+    };
+    fr.readAsArrayBuffer(file);
+  }
+
+  function readPaste(text){
+    if(!text.trim()){ toast("Nothing pasted yet."); return; }
+    try{
+      var wb = XLSX.read(text, { type:"string" });
+      var grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],
+                    { header:1, blankrows:false, defval:"" });
+      if(grid.length < 2) throw new Error("Paste the heading row and at least one hospital.");
+      loadTable(grid[0], grid.slice(1));
+    }catch(err){
+      $("imp_out").innerHTML = '<div class="card"><div class="err">'
+        + esc(err.message || "Could not read that.") + '</div></div>';
+    }
+  }
+
   function wireImport(){
-    var chk = $("imp_check"), go = $("imp_go"), out = $("imp_out");
-    if(!chk) return;
-
-    chk.addEventListener("click", function(){
-      IMPORT_READY = null; go.classList.add("hidden");
-      var r = parsePaste($("imp_data").value);
-      if(r.error){ out.innerHTML = '<div class="err">'+esc(r.error)+'</div>'; return; }
-      if(!r.rows.length){ out.innerHTML = '<div class="err">No usable rows found.</div>'; return; }
-
-      IMPORT_READY = r;
-      var withCoords = r.rows.filter(function(x){ return x.lat && x.lng; }).length;
-      var withPhone  = r.rows.filter(function(x){ return x.phone_call; }).length;
-
-      out.innerHTML = '<div class="warn"><b>'+r.rows.length+' hospitals ready.</b><br>'
-        + 'Columns matched: '+esc(r.matched.join(", "))+'<br>'
-        + (r.specCols.length ? 'Treated as specialties: '+esc(r.specCols.join(", "))+'<br>' : '')
-        + withPhone+' with a phone number, '+withCoords+' with ambulance bay coordinates'
-        + (r.skipped ? '<br>'+r.skipped+' rows skipped (hidden or unnamed)' : '')
-        + '</div>'
-        + '<div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Phone</th>'
-        + '<th>Door</th><th>Coords</th><th>Specialties</th></tr></thead><tbody>'
-        + r.rows.slice(0,5).map(function(x){
-            return '<tr><td>'+esc(x.name)+'</td><td>'+esc(x.phone_call||"\u2014")+'</td>'
-              + '<td>'+esc(x.door_code||"\u2014")+'</td>'
-              + '<td>'+(x.lat&&x.lng ? "yes" : "\u2014")+'</td>'
-              + '<td class="small">'+esc(x.specialties.join(", ")||"\u2014")+'</td></tr>';
-          }).join("")
-        + '</tbody></table></div>'
-        + (r.rows.length > 5 ? '<p class="hint">Showing the first 5 of '+r.rows.length+'.</p>' : '');
-      go.classList.remove("hidden");
+    var tpl = $("imp_tpl");
+    if(!tpl) return;
+    tpl.addEventListener("click", downloadTemplate);
+    $("imp_file").addEventListener("change", function(e){
+      if(e.target.files && e.target.files[0]) readFile(e.target.files[0]);
     });
-
-    go.addEventListener("click", function(){
-      if(!IMPORT_READY) return;
-      var replace = $("imp_replace").checked;
-      if(replace && !confirm("This deletes every hospital currently in this organization, then imports "
-          + IMPORT_READY.rows.length + ". Continue?")) return;
-
-      go.disabled = true; go.textContent = "Importing\u2026";
-
-      var step = replace
-        ? db.from("hospitals").delete().eq("org_id", orgId)
-        : Promise.resolve({error:null});
-
-      step.then(function(d){
-        if(d && d.error) throw d.error;
-        return db.from("hospitals").insert(IMPORT_READY.rows);
-      }).then(function(r){
-        if(r.error) throw r.error;
-        // make sure every specialty that came in is known to this org
-        var names = {};
-        IMPORT_READY.rows.forEach(function(x){
-          x.specialties.forEach(function(sp){ names[sp] = 1; });
-        });
-        var list = Object.keys(names);
-        if(!list.length) return { error:null };
-        return db.from("hospital_specialties").upsert(
-          list.map(function(n, i){
-            return { org_id:orgId, name:n, label:n, is_key:true, sort_order:(i+1)*10 };
-          }), { onConflict:"org_id,name", ignoreDuplicates:true });
-      }).then(function(r){
-        go.disabled = false; go.textContent = "Import";
-        if(r && r.error) throw r.error;
-        toast("Imported " + IMPORT_READY.rows.length + " hospitals");
-        IMPORT_READY = null;
-        renderHospitals();
-      }).catch(function(e){
-        go.disabled = false; go.textContent = "Import";
-        $("imp_out").innerHTML = '<div class="err">'+esc(e.message||"Import failed")+'</div>';
-      });
+    $("imp_paste_toggle").addEventListener("click", function(){
+      $("imp_paste_wrap").classList.toggle("hidden");
     });
+    $("imp_paste_go").addEventListener("click", function(){ readPaste($("imp_data").value); });
   }
 
   function wireHospitalForm(){
@@ -723,6 +896,11 @@
       });
       return;
     }
+    if(t.id === "imp_preview"){ renderPreview(); return; }
+    if(t.id === "imp_back"){ renderMapping(); return; }
+    if(t.id === "imp_go"){ doImport(); return; }
+    if(t.id === "imp_cancel"){ IMP = null; renderHospitals(); return; }
+
     var ft = t.closest(".js-feat");
     if(ft && !ft.disabled){
       var want = ft.getAttribute("aria-pressed") !== "true";
@@ -756,6 +934,11 @@
 
   document.addEventListener("change", function(e){
     var s = e.target;
+    if(s.classList && s.classList.contains("js-map")){
+      IMP.mapping[parseInt(s.getAttribute("data-i"), 10)] = s.value;
+      renderMapping();
+      return;
+    }
     if(!s.classList || !s.classList.contains("js-role")) return;
     db.from("memberships").update({role:s.value}).eq("id", s.getAttribute("data-id"))
       .then(function(r){ if(r.error) return oops(r.error); toast("Role updated"); });
