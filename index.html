@@ -1514,30 +1514,38 @@
     var kind = payload && payload.kind;
 
     if(kind === "sched"){
+      var unit = (STATE.me && STATE.me.unit) || null;
+
       if(payload.action === "add"){
-        return SB.from("schedule_blocks").insert({
+        return SB.from("schedule_blocks").upsert({
           org_id: ORG.org_id, user_id: STATE.me.userId,
-          starts_at: payload.start, ends_at: payload.end,
+          client_id: payload.id, unit_number: unit,
+          starts_at: payload.start,
+          ends_at: payload.end || null,
           label: payload.label || null,
           share_location: !!(payload.lat && payload.lng),
-          lat: payload.lat || null, lng: payload.lng || null,
-          loc_source: payload.src || null
-        });
+          lat: payload.lat ? parseFloat(payload.lat) : null,
+          lng: payload.lng ? parseFloat(payload.lng) : null,
+          loc_source: payload.locSource || null
+        }, { onConflict: "org_id,client_id" });
       }
-      if(payload.action === "remove"){
+
+      if(payload.action === "del" || payload.action === "remove"){
         return SB.from("schedule_blocks").delete()
-          .eq("org_id", ORG.org_id).eq("id", payload.id);
+          .eq("org_id", ORG.org_id).eq("client_id", payload.id);
       }
-      // available now / not available
-      return SB.from("availability").upsert({
-        org_id: ORG.org_id, user_id: STATE.me.userId,
-        is_available: payload.available !== false,
-        until_at: payload.until || null,
-        share_location: !!(payload.lat && payload.lng),
-        lat: payload.lat || null, lng: payload.lng || null,
-        loc_source: payload.src || null,
-        updated_at: new Date().toISOString()
-      }, { onConflict: "org_id,user_id" });
+
+      if(payload.action === "setloc"){
+        var share = !!(payload.lat && payload.lng);
+        return SB.from("schedule_blocks").update({
+          share_location: share,
+          lat: share ? parseFloat(payload.lat) : null,
+          lng: share ? parseFloat(payload.lng) : null,
+          loc_source: payload.locSource || null
+        }).eq("org_id", ORG.org_id).eq("client_id", payload.id);
+      }
+
+      return Promise.resolve({ error:null });
     }
 
     if(kind === "codelog"){
@@ -1604,7 +1612,8 @@
         ["Search Placeholder", "Search"],
         /* writes no longer go to a script; the layer below handles them */
         ["Profile Update URL", "supabase"],
-        ["Code Log URL", "supabase"]
+        ["Code Log URL", "supabase"],
+        ["Upload Link", o.upload_url]
       ];
       var extra = o.settings || {};
       Object.keys(extra).forEach(function(k){ pairs.push([k, extra[k]]); });
@@ -1799,7 +1808,7 @@
       .order("starts_at").then(function(r){
         return (r.data || []).map(function(x){
           return {
-            "ID": str(x.id), "Unit": str(x.unit_number || ""),
+            "ID": str(x.client_id || x.id), "Unit": str(x.unit_number || ""),
             "Start": str(x.starts_at), "End": str(x.ends_at),
             "Label": str(x.label),
             "Lat": str(x.lat), "Lng": str(x.lng),
@@ -2647,12 +2656,12 @@
 
   // ---------- File Upload (routes to Egnyte upload link) ----------
   var UP={loaded:false,types:[],link:"",cur:null};
-  var UP_DEFAULT_LINK="https://houstonhatzalah.egnyte.com/ul/s21HNn96UH";
+  var UP_DEFAULT_LINK="";  /* set per organization, see below */
   var UP_DEFAULT_TYPES=["Good Will Agreement","Resignation","Immunizations","License Plate","Driver's License","EMT/Paramedic TX License","Car Insurance","American Heart BLS","ACLS","PALS","COH E-Permit","HFD Waiver","HIPAA","HIPAA Awareness","Jurisprudence less than 4 years old","Epi Training Yearly","Evoc Course","Hazmat","BBP","SOP's","L&S Policy"];
   function closeUpload(){ $("uploadScreen").classList.remove("open"); }
   function openUpload(target, preset){
     if(demoNo()) return;
-    UP.link=(target&&target.trim())||UP_DEFAULT_LINK;
+    UP.link=(target&&target.trim())||getSetting("Upload Link","")||UP_DEFAULT_LINK;
     if(!$("uploadScreen").classList.contains("open")) navOpen(closeUpload);
     $("uploadScreen").classList.add("open");
     function done(){ if(preset) showUploadStep(preset); else renderUploadPicker(); }
