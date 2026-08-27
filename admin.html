@@ -312,1099 +312,135 @@
     if(tab === "features")  renderFeatures();
   }
 
-  /* ================= MEMBERS ================= */
+  /* ================= MEMBERS =================
+     This shows the ROSTER - everyone in the organization, whether or not
+     they have ever opened the app. A person appears here the moment you
+     import them, and gains a tick once they sign in for the first time.
+     Anyone who signs in without a place on the roster is listed
+     underneath, waiting to be given a unit. */
+
   function renderMembers(){
     var el = $("tab-members");
     el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
 
     Promise.all([
+      db.from("roster_slots").select("*").eq("org_id", orgId).order("unit_number"),
       db.from("memberships")
-        .select("id,user_id,role,status,unit_number,display_name,cert_level,duty_status,is_dispatcher")
+        .select("id,user_id,role,status,unit_number,display_name,is_dispatcher,duty_status")
         .eq("org_id", orgId),
-      db.from("profiles").select("id,full_name,email,phone")
+      db.from("profiles").select("id,full_name,email")
     ]).then(function(r){
       if(r[0].error) throw r[0].error;
-      var people = {};
-      (r[1].data||[]).forEach(function(p){ people[p.id] = p; });
+      var roster = r[0].data || [], mems = r[1].data || [], people = {};
+      (r[2].data || []).forEach(function(p){ people[p.id] = p; });
 
-      var rows = (r[0].data||[]).map(function(m){
-        m.person = people[m.user_id] || {};
-        return m;
+      var byUnit = {};
+      mems.forEach(function(m){
+        if(m.unit_number) byUnit[String(m.unit_number).toLowerCase()] = m;
       });
-      rows.sort(function(a,b){
-        var rank = {pending:0, active:1, suspended:2, removed:3};
-        if(rank[a.status] !== rank[b.status]) return rank[a.status] - rank[b.status];
-        return (a.unit_number||"").localeCompare(b.unit_number||"");
-      });
+      var unplaced = mems.filter(function(m){ return !m.unit_number; });
 
-      var pending = rows.filter(function(m){ return m.status === "pending"; });
+      var signedIn = roster.filter(function(s){
+        return byUnit[String(s.unit_number).toLowerCase()];
+      }).length;
+      var freeSlots = roster.filter(function(s){
+        return !byUnit[String(s.unit_number).toLowerCase()];
+      });
 
       var html = "";
-      if(pending.length){
-        html += '<div class="warn"><b>'+pending.length+' waiting for approval.</b> '
-             +  'They signed up with an organization email but cannot see anything yet.</div>';
+
+      if(unplaced.length){
+        html += '<div class="warn"><b>'+unplaced.length+' waiting to be given a unit.</b> '
+             +  'They signed in but were not on the roster. See the bottom of this page.</div>';
       }
 
-      html += '<div class="card"><h2>Import your roster</h2>'
-        + '<p class="hint">Paste or upload your Members list. Recognised headings: '
-        + 'First Name, Last Name, Unit, Admin, Dispatcher, Active, Status. '
-        + 'Admin and Dispatcher are separate \u2014 a person can be either, both or neither.</p>'
-        + '<p class="hint">This sets up who is who. Each person still signs in with their own '
-        + 'email address the first time.</p>'
-        + '<div class="f"><input id="mi_file" type="file" accept=".csv,.xlsx,.xls"></div>'
-        + '<div id="mi_out"></div></div>';
+      html += '<div class="card"><h2>Roster</h2>'
+        + '<p class="hint">'+roster.length+' people. '+signedIn+' have signed in at least once. '
+        + 'Everyone else is set up and waiting for their first sign-in.</p>'
+        + '<p class="hint">The <b>email</b> matters: when someone signs in with the address on '
+        + 'their row, they go straight into that unit with these settings. Get it wrong and they '
+        + 'land in the waiting list instead.</p>';
 
-      html += '<div class="card"><h2>Members</h2>'
-           +  '<p class="hint">'+rows.length+' on the roster. '
-           +  'Approve new sign-ups, set roles, or suspend access here.</p>';
-
-      if(!rows.length){
-        html += '<div class="empty">Nobody has signed up yet.</div></div>';
-        el.innerHTML = html; return;
-      }
-
-      html += '<div class="scroller"><table><thead><tr>'
-           +  '<th>Name</th><th>Unit</th><th>Role</th><th>Dispatcher</th>'
-           +  '<th>Duty</th><th>Status</th><th></th>'
-           +  '</tr></thead><tbody>';
-
-      rows.forEach(function(m){
-        var name = m.display_name || m.person.full_name || m.person.email || "\u2014";
-        html += '<tr>'
-          + '<td><b>'+esc(name)+'</b><div class="small">'+esc(m.person.email||"")+'</div></td>'
-          + '<td>'+esc(m.unit_number||"\u2014")+'</td>'
-          + '<td><select class="js-role" data-id="'+m.id+'">'
-          +   ["member","dispatcher","admin","guest"].map(function(rr){
-                return '<option value="'+rr+'"'+(m.role===rr?" selected":"")+'>'+rr+'</option>';
-              }).join("")
-          + '</select></td>'
-          + '<td style="text-align:center"><input type="checkbox" class="js-disp" '
-          +   'data-id="'+m.id+'" '+(m.is_dispatcher?"checked":"")+'></td>'
-          + '<td><input class="js-duty" data-id="'+m.id+'" value="'+esc(m.duty_status||"")+'" '
-          +   'placeholder="Primary / Backup" style="width:120px"></td>'
-          + '<td><span class="pill '+esc(m.status)+'">'+esc(m.status)+'</span></td>'
-          + '<td class="row">'
-          +   (m.status === "pending"
-                ? '<button class="btn ok js-approve" data-id="'+m.id+'">Approve</button>' : '')
-          +   (m.status === "active"
-                ? '<button class="btn danger js-suspend" data-id="'+m.id+'">Suspend</button>' : '')
-          +   (m.status === "suspended"
-                ? '<button class="btn ok js-approve" data-id="'+m.id+'">Reinstate</button>' : '')
-          + '</td></tr>';
-      });
-
-      html += '</tbody></table></div></div>';
-      el.innerHTML = html;
-      wireMemberImport();
-    }).catch(function(e){
-      el.innerHTML = '<div class="card"><div class="err">'+esc(e.message||"Could not load members")+'</div></div>';
-    });
-  }
-
-  /* ================= HOSPITALS ================= */
-  function renderHospitals(){
-    var el = $("tab-hospitals");
-    el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
-
-    db.from("hospitals").select("*").eq("org_id", orgId).order("sort_order")
-      .then(function(r){
-        if(r.error) throw r.error;
-        var rows = r.data || [];
-        var gaps = rows.filter(function(h){ return !h.phone_call || !h.address; }).length;
-        var noCoords = rows.filter(function(h){ return !h.lat || !h.lng; }).length;
-
-        var html = '<div class="card"><h2>Import your hospital list</h2>'
-          + '<p class="hint">Upload a spreadsheet. If your headings are different from ours you '
-          + 'can match them up on the next step \u2014 you do not need to reformat anything.</p>'
-          + '<div class="steps">'
-          +   '<div class="step"><span class="n">1</span><div>'
-          +     '<b>Start from our template</b><div class="small">Optional. Already have a list? '
-          +     'Skip straight to step 2.</div>'
-          +     '<button id="imp_tpl" class="btn" style="margin-top:8px">Download template (.csv)</button>'
-          +   '</div></div>'
-          +   '<div class="step"><span class="n">2</span><div>'
-          +     '<b>Upload your file</b><div class="small">Excel (.xlsx) or .csv</div>'
-          +     '<input id="imp_file" type="file" accept=".csv,.xlsx,.xls" style="margin-top:8px">'
-          +     '<div class="small" style="margin-top:6px">'
-          +       '<button id="imp_paste_toggle" class="linklike">or paste from the clipboard instead</button>'
-          +     '</div>'
-          +     '<div id="imp_paste_wrap" class="hidden" style="margin-top:8px">'
-          +       '<textarea id="imp_data" rows="5" placeholder="Paste rows including the heading row"></textarea>'
-          +       '<button id="imp_paste_go" class="btn" style="margin-top:8px">Use this</button>'
-          +     '</div>'
-          +   '</div></div>'
-          + '</div>'
-          + '<div id="imp_out"></div></div>'
-
-          + '<div class="card"><h2>Add a hospital</h2>'
-          + '<p class="hint">Only the name is required. Everything else can be filled in later.</p>'
-          + '<div class="grid2">'
-          + '<div class="f"><label>Name</label><input id="nh_name"></div>'
-          + '<div class="f"><label>Phone</label><input id="nh_phone"></div>'
-          + '<div class="f"><label>Red phone</label><input id="nh_red"></div>'
-          + '<div class="f"><label>Door code</label><input id="nh_door"></div>'
-          + '<div class="f" style="grid-column:1/-1"><label>Address</label><input id="nh_addr"></div>'
-          + '<div class="f"><label>Latitude</label><input id="nh_lat" inputmode="decimal" placeholder="29.693237"></div>'
-          + '<div class="f"><label>Longitude</label><input id="nh_lng" inputmode="decimal" placeholder="-95.520742"></div>'
-          + '</div>'
-          + '<p class="hint" style="margin:0 0 12px">Coordinates point Navigate at the ambulance bay '
-          + 'instead of the front door. When they are set they win, and the address is still shown '
-          + 'on the card.</p>'
-          + '<button id="nh_add" class="btn primary">Add hospital</button></div>';
-
-        html += '<div class="card"><h2>'+rows.length+' hospitals</h2>';
-        if(gaps){
-          html += '<p class="hint">'+gaps+' are missing a phone number or an address. '
-               +  'Members will see "not on file" for those.</p>';
-        }
-        if(noCoords){
-          html += '<p class="hint">'+noCoords+' have no ambulance bay coordinates, so Navigate '
-               +  'will send members to the street address instead.</p>';
-        }
-
-        if(!rows.length){
-          html += '<div class="empty">No hospitals yet.</div></div>';
-          el.innerHTML = html; wireHospitalForm(); return;
-        }
-
+      if(!roster.length){
+        html += '<div class="empty">No roster yet. Import your Members sheet below.</div></div>';
+      } else {
         html += '<div class="scroller"><table><thead><tr>'
-             +  '<th>Name</th><th>Phone</th><th>Door</th><th>Address</th>'
-             +  '<th>Ambulance bay</th><th></th>'
-             +  '</tr></thead><tbody>';
-        rows.forEach(function(h){
+          + '<th style="width:76px">Unit</th><th>Name</th><th>Email</th><th style="width:110px">Role</th>'
+          + '<th style="width:80px">Dispatch</th><th style="width:110px">Duty</th>'
+          + '<th style="width:96px">Signed in</th><th></th></tr></thead><tbody>';
+
+        roster.forEach(function(s){
+          var m = byUnit[String(s.unit_number).toLowerCase()];
           html += '<tr>'
-            + '<td><input class="js-h" data-id="'+h.id+'" data-f="name" value="'+esc(h.name)+'"></td>'
-            + '<td><input class="js-h" data-id="'+h.id+'" data-f="phone_call" value="'+esc(h.phone_call||"")+'" placeholder="\u2014"></td>'
-            + '<td><input class="js-h" data-id="'+h.id+'" data-f="door_code" value="'+esc(h.door_code||"")+'" placeholder="\u2014" style="width:90px"></td>'
-            + '<td><input class="js-h" data-id="'+h.id+'" data-f="address" value="'+esc(h.address||"")+'" placeholder="\u2014"></td>'
-            + '<td><div class="coords">'
-            +   '<input class="js-h" data-id="'+h.id+'" data-f="lat" value="'+esc(h.lat||"")+'" placeholder="lat" inputmode="decimal">'
-            +   '<input class="js-h" data-id="'+h.id+'" data-f="lng" value="'+esc(h.lng||"")+'" placeholder="lng" inputmode="decimal">'
-            + '</div></td>'
-            + '<td class="actions"><button class="xbtn js-hdel" data-id="'+h.id+'" '
-            +   'data-name="'+esc(h.name)+'" title="Delete '+esc(h.name)+'" '
-            +   'aria-label="Delete '+esc(h.name)+'">\u00D7</button></td>'
+            + '<td><input class="js-rs" data-id="'+s.id+'" data-f="unit_number" '
+            +   'value="'+esc(s.unit_number)+'" style="width:68px"></td>'
+            + '<td><input class="js-rs" data-id="'+s.id+'" data-f="display_name" '
+            +   'value="'+esc(s.display_name||"")+'"></td>'
+            + '<td><input class="js-rs" data-id="'+s.id+'" data-f="email" '
+            +   'value="'+esc(s.email||"")+'" placeholder="not set"></td>'
+            + '<td><select class="js-rsel" data-id="'+s.id+'" data-f="role">'
+            +   ["member","admin","guest"].map(function(x){
+                  return '<option value="'+x+'"'+(s.role===x?" selected":"")+'>'+x+'</option>';
+                }).join("")
+            + '</select></td>'
+            + '<td style="text-align:center"><input type="checkbox" class="js-rchk" '
+            +   'data-id="'+s.id+'" data-f="is_dispatcher" '+(s.is_dispatcher?"checked":"")+'></td>'
+            + '<td><input class="js-rs" data-id="'+s.id+'" data-f="duty_status" '
+            +   'value="'+esc(s.duty_status||"")+'" style="width:100px"></td>'
+            + '<td>' + (m
+                ? '<span class="pill active">yes</span>'
+                : '<span class="pill pending">not yet</span>') + '</td>'
+            + '<td class="actions"><button class="xbtn js-rdel" data-id="'+s.id+'" '
+            +   'data-name="'+esc(s.unit_number)+'" title="Remove from roster">\u00D7</button></td>'
             + '</tr>';
         });
         html += '</tbody></table></div>'
-             +  '<p class="hint" style="margin-top:12px">Edits save when you click out of a box.</p></div>';
-        el.innerHTML = html;
-        wireHospitalForm();
-      }).catch(function(e){
-        el.innerHTML = '<div class="card"><div class="err">'+esc(e.message||"Could not load hospitals")+'</div></div>';
-      });
-  }
-
-  /* ================= IMPORTING A HOSPITAL LIST =================
-     Three steps: pick a file, confirm which of their columns means what,
-     then import. The middle step is the important one - most people
-     already have a list and should not have to rebuild it to match us. */
-
-  var IMP = null;   // { headers, rows, mapping }
-
-  var OUR_FIELDS = [
-    { key:"name",       label:"Hospital name", required:true,
-      aliases:["hospital name","name","hospital","facility","facility name"] },
-    { key:"phone_call", label:"Phone number",
-      aliases:["phone (call)","phone call","phone","main phone","telephone","tel","contact"] },
-    { key:"phone_red",  label:"Red phone",
-      aliases:["red phone","redphone","red","direct line","er phone"] },
-    { key:"address",    label:"Address",
-      aliases:["address (navigate)","address","street address","location","street"] },
-    { key:"door_code",  label:"Door code",
-      aliases:["door code","doorcode","door","entry code","keypad","access code"] },
-    { key:"lat",        label:"Latitude (ambulance bay)",
-      aliases:["latitude","lat"] },
-    { key:"lng",        label:"Longitude (ambulance bay)",
-      aliases:["longitude","lng","long","lon"] }
-  ];
-  var SKIP_HEADERS = ["code","specialties (summary)","specialties","summary","notes"];
-
-  function norm(h){ return String(h||"").trim().toLowerCase(); }
-
-  function autoMap(headers, rows){
-    return headers.map(function(h, i){
-      var n = norm(h);
-      if(!n) return "ignore";
-      if(n === "hide") return "hide";
-      if(SKIP_HEADERS.indexOf(n) > -1) return "ignore";
-      for(var f=0; f<OUR_FIELDS.length; f++){
-        if(OUR_FIELDS[f].aliases.indexOf(n) > -1) return OUR_FIELDS[f].key;
-      }
-      // a column of X marks is almost always a capability tick-box
-      var ticks = 0, filled = 0;
-      for(var r=0; r<rows.length; r++){
-        var v = String(rows[r][i] == null ? "" : rows[r][i]).trim().toUpperCase();
-        if(!v) continue;
-        filled++;
-        if(v === "X" || v === "YES" || v === "TRUE" || v === "1") ticks++;
-      }
-      if(filled && ticks === filled) return "specialty";
-      return "ignore";
-    });
-  }
-
-  function loadTable(headers, rows){
-    headers = headers.map(function(h){ return String(h == null ? "" : h).trim(); });
-    rows = rows.filter(function(r){
-      return r.some(function(c){ return String(c == null ? "" : c).trim() !== ""; });
-    });
-    if(!rows.length){
-      $("imp_out").innerHTML = '<div class="err">That file has headings but no rows.</div>';
-      return;
-    }
-    IMP = { headers:headers, rows:rows, mapping:autoMap(headers, rows) };
-    renderMapping();
-  }
-
-  function renderMapping(){
-    var opts = function(sel){
-      var o = '<option value="ignore"'+(sel==="ignore"?" selected":"")+'>Do not import</option>'
-            + '<option value="specialty"'+(sel==="specialty"?" selected":"")+'>A specialty (X = has it)</option>'
-            + '<option value="hide"'+(sel==="hide"?" selected":"")+'>Hide row when marked X</option>';
-      OUR_FIELDS.forEach(function(f){
-        o += '<option value="'+f.key+'"'+(sel===f.key?" selected":"")+'>'+esc(f.label)+'</option>';
-      });
-      return o;
-    };
-
-    var hasName = IMP.mapping.indexOf("name") > -1;
-    var used = {};
-    IMP.mapping.forEach(function(m){ if(m !== "ignore" && m !== "specialty") used[m] = (used[m]||0)+1; });
-    var dupes = Object.keys(used).filter(function(k){ return used[k] > 1; });
-
-    var html = '<div class="card"><h2>Check the columns</h2>'
-      + '<p class="hint">We have guessed what each of your columns means. Change anything we got '
-      + 'wrong. Columns set to \u201Cdo not import\u201D are simply left out.</p>';
-
-    if(!hasName){
-      html += '<div class="err">One column must be set to <b>Hospital name</b> before you can import.</div>';
-    }
-    if(dupes.length){
-      html += '<div class="err">Two columns are both set to the same thing. Each of ours can only be used once.</div>';
-    }
-
-    html += '<div class="maprow"><b class="small">YOUR COLUMN</b><span></span><b class="small">MEANS</b></div>';
-
-    IMP.headers.forEach(function(h, i){
-      var sample = "";
-      for(var r=0; r<IMP.rows.length && !sample; r++){
-        sample = String(IMP.rows[r][i] == null ? "" : IMP.rows[r][i]).trim();
-      }
-      html += '<div class="maprow">'
-        + '<div class="yours">'+esc(h || "(no heading)")
-        +   (sample ? '<div class="sample">e.g. '+esc(sample.slice(0,40))+'</div>' : '')
-        + '</div>'
-        + '<span class="arrow">\u2192</span>'
-        + '<select class="js-map" data-i="'+i+'">'+opts(IMP.mapping[i])+'</select>'
-        + '</div>';
-    });
-
-    html += '<div class="row" style="margin-top:16px">'
-      + '<button id="imp_preview" class="btn primary"'+((!hasName||dupes.length)?" disabled":"")+'>'
-      + 'Preview import</button>'
-      + '<button id="imp_cancel" class="btn">Start over</button></div></div>';
-
-    $("imp_out").innerHTML = html;
-  }
-
-  function buildRows(){
-    var map = {}, specCols = [], hideCol = -1;
-    IMP.mapping.forEach(function(m, i){
-      if(m === "ignore") return;
-      if(m === "specialty"){ specCols.push({ i:i, label:IMP.headers[i] }); return; }
-      if(m === "hide"){ hideCol = i; return; }
-      map[m] = i;
-    });
-
-    var out = [], skipped = 0;
-    IMP.rows.forEach(function(cells, n){
-      var cell = function(i){
-        return i === undefined ? "" : String(cells[i] == null ? "" : cells[i]).trim();
-      };
-      if(hideCol > -1 && cell(hideCol).toUpperCase() === "X"){ skipped++; return; }
-      var name = cell(map.name);
-      if(!name){ skipped++; return; }
-
-      var specs = [];
-      specCols.forEach(function(sc){
-        var v = cell(sc.i).toUpperCase();
-        if(v === "X" || v === "YES" || v === "TRUE" || v === "1") specs.push(sc.label);
-      });
-
-      var lat = parseFloat(cell(map.lat)), lng = parseFloat(cell(map.lng));
-      out.push({
-        org_id: orgId, name: name,
-        phone_call: cell(map.phone_call) || null,
-        phone_red:  cell(map.phone_red)  || null,
-        address:    cell(map.address)    || null,
-        door_code:  cell(map.door_code)  || null,
-        lat: isNaN(lat) ? null : lat,
-        lng: isNaN(lng) ? null : lng,
-        specialties: specs,
-        sort_order: (n + 1) * 10
-      });
-    });
-    return { rows:out, skipped:skipped,
-             specCols:specCols.map(function(c){ return c.label; }) };
-  }
-
-  function renderPreview(){
-    var b = buildRows();
-    if(!b.rows.length){
-      $("imp_out").innerHTML = '<div class="card"><div class="err">No usable rows. '
-        + 'Check that the Hospital name column is the right one.</div>'
-        + '<button id="imp_cancel" class="btn" style="margin-top:12px">Start over</button></div>';
-      return;
-    }
-    IMP.ready = b.rows;
-
-    var coords = b.rows.filter(function(x){ return x.lat && x.lng; }).length;
-    var phones = b.rows.filter(function(x){ return x.phone_call; }).length;
-
-    $("imp_out").innerHTML = '<div class="card"><h2>Ready to import</h2>'
-      + '<div class="warn"><b>'+b.rows.length+' hospitals.</b><br>'
-      +   phones+' with a phone number, '+coords+' with ambulance bay coordinates.'
-      +   (b.specCols.length ? '<br>Specialties: '+esc(b.specCols.join(", ")) : '')
-      +   (b.skipped ? '<br>'+b.skipped+' rows left out (hidden or no name).' : '')
-      + '</div>'
-      + '<div class="scroller"><table><thead><tr><th>Name</th><th>Phone</th><th>Door</th>'
-      +   '<th>Bay coords</th><th>Specialties</th></tr></thead><tbody>'
-      + b.rows.slice(0,6).map(function(x){
-          return '<tr><td>'+esc(x.name)+'</td><td>'+esc(x.phone_call||"\u2014")+'</td>'
-            + '<td>'+esc(x.door_code||"\u2014")+'</td>'
-            + '<td>'+(x.lat&&x.lng?"yes":"\u2014")+'</td>'
-            + '<td class="small">'+esc(x.specialties.join(", ")||"\u2014")+'</td></tr>';
-        }).join("")
-      + '</tbody></table></div>'
-      + (b.rows.length>6 ? '<p class="hint">First 6 of '+b.rows.length+'.</p>' : '')
-      + '<label class="row" style="margin:14px 0"><input type="checkbox" id="imp_replace" '
-      +   'style="width:auto"> <span>Replace the current list instead of adding to it</span></label>'
-      + '<div class="row"><button id="imp_go" class="btn primary">Import '+b.rows.length+' hospitals</button>'
-      + '<button id="imp_back" class="btn">Back to columns</button></div></div>';
-  }
-
-  function doImport(){
-    var go = $("imp_go");
-    var replace = $("imp_replace") && $("imp_replace").checked;
-    if(replace && !confirm("This deletes every hospital currently in this organization, then "
-        + "imports " + IMP.ready.length + ". Continue?")) return;
-
-    go.disabled = true; go.textContent = "Importing\u2026";
-    var step = replace ? db.from("hospitals").delete().eq("org_id", orgId)
-                       : Promise.resolve({ error:null });
-
-    step.then(function(d){
-      if(d && d.error) throw d.error;
-      return db.from("hospitals").insert(IMP.ready);
-    }).then(function(r){
-      if(r.error) throw r.error;
-      var names = {};
-      IMP.ready.forEach(function(x){ x.specialties.forEach(function(sp){ names[sp] = 1; }); });
-      var list = Object.keys(names);
-      if(!list.length) return { error:null };
-      return db.from("hospital_specialties").upsert(
-        list.map(function(n, i){
-          return { org_id:orgId, name:n, label:n, is_key:true, sort_order:(i+1)*10 };
-        }), { onConflict:"org_id,name", ignoreDuplicates:true });
-    }).then(function(r){
-      if(r && r.error) throw r.error;
-      toast("Imported " + IMP.ready.length + " hospitals");
-      IMP = null;
-      renderHospitals();
-    }).catch(function(e){
-      go.disabled = false; go.textContent = "Import";
-      $("imp_out").innerHTML = '<div class="card"><div class="err">'
-        + esc(e.message || "Import failed") + '</div>'
-        + '<button id="imp_cancel" class="btn" style="margin-top:12px">Start over</button></div>';
-    });
-  }
-
-  function downloadTemplate(){
-    var headers = ["Hospital Name","Phone (Call)","Red Phone","Address","Door Code",
-                   "Latitude","Longitude","Trauma","Stroke","Cardiac","Paediatric"];
-    var examples = [
-      ["Example General Hospital","713-555-1000","713-555-1911",
-       "100 Main Street, Yourtown","4412#","29.709600","-95.397100","X","X","X",""],
-      ["Example Children's Hospital","713-555-2000","",
-       "200 Second Street, Yourtown","","","","","","","X"]
-    ];
-    var csv = [headers].concat(examples).map(function(r){
-      return r.map(function(c){
-        return /[",\n]/.test(c) ? '"'+String(c).replace(/"/g,'""')+'"' : c;
-      }).join(",");
-    }).join("\r\n");
-
-    var blob = new Blob(["\ufeff" + csv], { type:"text/csv;charset=utf-8;" });
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "hospital-list-template.csv";
-    document.body.appendChild(a); a.click();
-    setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 500);
-    toast("Template downloaded");
-  }
-
-  function readFile(file){
-    $("imp_out").innerHTML = '<div class="card"><div class="empty">Reading '
-      + esc(file.name) + '\u2026</div></div>';
-    var fr = new FileReader();
-    fr.onerror = function(){
-      $("imp_out").innerHTML = '<div class="card"><div class="err">Could not read that file.</div></div>';
-    };
-    fr.onload = function(e){
-      try{
-        var wb = XLSX.read(e.target.result, { type:"array" });
-        var sheet = wb.Sheets[wb.SheetNames[0]];
-        var grid = XLSX.utils.sheet_to_json(sheet, { header:1, blankrows:false, defval:"" });
-        if(!grid.length){ throw new Error("That file looks empty."); }
-        loadTable(grid[0], grid.slice(1));
-      }catch(err){
-        $("imp_out").innerHTML = '<div class="card"><div class="err">'
-          + esc(err.message || "Could not understand that file.")
-          + ' Try saving it as .csv and uploading again.</div></div>';
-      }
-    };
-    fr.readAsArrayBuffer(file);
-  }
-
-  function readPaste(text){
-    if(!text.trim()){ toast("Nothing pasted yet."); return; }
-    try{
-      var wb = XLSX.read(text, { type:"string" });
-      var grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],
-                    { header:1, blankrows:false, defval:"" });
-      if(grid.length < 2) throw new Error("Paste the heading row and at least one hospital.");
-      loadTable(grid[0], grid.slice(1));
-    }catch(err){
-      $("imp_out").innerHTML = '<div class="card"><div class="err">'
-        + esc(err.message || "Could not read that.") + '</div></div>';
-    }
-  }
-
-  function wireImport(){
-    var tpl = $("imp_tpl");
-    if(!tpl) return;
-    tpl.addEventListener("click", downloadTemplate);
-    $("imp_file").addEventListener("change", function(e){
-      if(e.target.files && e.target.files[0]) readFile(e.target.files[0]);
-    });
-    $("imp_paste_toggle").addEventListener("click", function(){
-      $("imp_paste_wrap").classList.toggle("hidden");
-    });
-    $("imp_paste_go").addEventListener("click", function(){ readPaste($("imp_data").value); });
-  }
-
-  function wireHospitalForm(){
-    wireImport();
-    var add = $("nh_add");
-    if(add) add.addEventListener("click", function(){
-      var name = $("nh_name").value.trim();
-      if(!name){ toast("A hospital needs a name."); return; }
-      add.disabled = true;
-      db.from("hospitals").insert({
-        org_id: orgId, name: name,
-        phone_call: $("nh_phone").value.trim() || null,
-        phone_red:  $("nh_red").value.trim()   || null,
-        door_code:  $("nh_door").value.trim()  || null,
-        address:    $("nh_addr").value.trim()  || null,
-        lat: parseFloat($("nh_lat").value) || null,
-        lng: parseFloat($("nh_lng").value) || null,
-        sort_order: 9999
-      }).then(function(r){
-        add.disabled = false;
-        if(r.error) return oops(r.error);
-        toast("Added " + name); renderHospitals();
-      }).catch(function(e){ add.disabled = false; oops(e); });
-    });
-  }
-
-  /* ================= PROTOCOLS =================
-     An admin uploads their own protocol PDF. Their browser turns each
-     page into an image AND pulls out the text behind it, then sends both
-     up. Members search the text and get shown the page image, exactly as
-     they are used to reading it. Nobody has to prepare anything for them. */
-
-  var PDF_SCALE_WIDTH = 1400;   // enough to read when zoomed on a phone
-  var PDF_QUALITY     = 0.82;
-
-  function renderProtocols(){
-    var el = $("tab-protocols");
-    el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
-
-    db.from("protocol_sets").select("*").eq("org_id", orgId)
-      .order("created_at", { ascending:false })
-      .then(function(r){
-        if(r.error) throw r.error;
-        var sets = r.data || [];
-
-        var html = '<div class="card"><h2>Upload a protocol book</h2>'
-          + '<p class="hint">Choose the PDF your medical director issued. Every page becomes a '
-          + 'readable image, and the words behind it become searchable. This all happens on '
-          + 'this computer, so a long book takes a few minutes and the browser tab must stay '
-          + 'open.</p>'
-          + '<div class="grid2">'
-          +   '<div class="f"><label>What to call it</label>'
-          +     '<input id="pr_name" placeholder="2026 Patient Care Guidelines"></div>'
-          +   '<div class="f"><label>Version (optional)</label>'
-          +     '<input id="pr_version" placeholder="Rev 3"></div>'
-          + '</div>'
-          + '<div class="f"><label>PDF file</label>'
-          +   '<input id="pr_file" type="file" accept="application/pdf"></div>'
-          + '<button id="pr_go" class="btn primary">Upload and process</button>'
-          + '<div id="pr_progress" class="hidden" style="margin-top:14px">'
-          +   '<div class="bar-outer"><div id="pr_bar" class="bar-inner"></div></div>'
-          +   '<div id="pr_status" class="mono">Starting\u2026</div>'
-          + '</div>'
-          + '<div id="pr_err"></div></div>';
-
-        html += '<div class="card"><h2>Protocol books</h2>';
-        if(!sets.length){
-          html += '<div class="empty">Nothing uploaded yet.</div></div>';
-        } else {
-          html += '<div class="scroller"><table><thead><tr><th>Name</th><th>Version</th>'
-               +  '<th>Pages</th><th>Members can see it</th><th></th></tr></thead><tbody>';
-          sets.forEach(function(x){
-            html += '<tr>'
-              + '<td><b>'+esc(x.name)+'</b></td>'
-              + '<td>'+esc(x.version||"\u2014")+'</td>'
-              + '<td>'+(x.page_count||0)+'</td>'
-              + '<td><button class="toggle js-pubset" data-id="'+x.id+'" aria-pressed="'
-              +   (x.is_published?"true":"false")+'"><span></span></button></td>'
-              + '<td class="actions">'
-              +   '<button class="btn js-toc" data-id="'+x.id+'" data-name="'+esc(x.name)+'" '
-              +     'style="padding:7px 11px;font-size:13px">Contents</button> '
-              +   '<button class="xbtn js-delset" data-id="'+x.id+'" '
-              +     'data-name="'+esc(x.name)+'" title="Delete" aria-label="Delete">\u00D7</button>'
-              + '</td>'
-              + '</tr>';
-          });
-          html += '</tbody></table></div>'
-               +  '<p class="hint" style="margin-top:12px">A book stays hidden from members until '
-               +  'you switch it on. Upload first, check it, then publish.</p></div>';
-        }
-        el.innerHTML = html;
-        wireProtocolForm();
-      }).catch(function(e){
-        el.innerHTML = '<div class="card"><div class="err">'
-          + esc(e.message||"Could not load protocols") + '</div></div>';
-      });
-  }
-
-  function setProgress(done, total, msg){
-    $("pr_bar").style.width = total ? Math.round(done/total*100)+"%" : "0%";
-    $("pr_status").textContent = msg;
-  }
-
-  function wireProtocolForm(){
-    var go = $("pr_go");
-    if(!go) return;
-    go.addEventListener("click", function(){
-      var f = $("pr_file").files && $("pr_file").files[0];
-      var name = $("pr_name").value.trim();
-      $("pr_err").innerHTML = "";
-      if(!f){ toast("Choose a PDF first."); return; }
-      if(!name){ toast("Give the book a name."); return; }
-      processPdf(f, name, $("pr_version").value.trim() || null);
-    });
-  }
-
-  function processPdf(file, name, version){
-    var go = $("pr_go");
-    go.disabled = true;
-    $("pr_progress").classList.remove("hidden");
-    setProgress(0, 1, "Opening the PDF\u2026");
-
-    var setId = null, pdf = null, total = 0;
-
-    var reader = new FileReader();
-    reader.onerror = function(){ stop("Could not read that file."); };
-    reader.onload = function(e){
-      pdfjsLib.GlobalWorkerOptions.workerSrc =
-        "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
-
-      pdfjsLib.getDocument({ data:new Uint8Array(e.target.result) }).promise
-        .then(function(doc){
-          pdf = doc; total = doc.numPages;
-          setProgress(0, total, "Found " + total + " pages. Creating the book\u2026");
-          return db.from("protocol_sets").insert({
-            org_id: orgId, name: name, version: version,
-            page_count: total, is_published: false
-          }).select().single();
-        })
-        .then(function(r){
-          if(r.error) throw r.error;
-          setId = r.data.id;
-          return runPages();
-        })
-        .then(function(){
-          return pdf.getOutline().catch(function(){ return null; });
-        })
-        .then(function(outline){ return saveOutline(outline, setId, pdf); })
-        .then(function(){
-          setProgress(total, total, "Done. " + total + " pages ready.");
-          go.disabled = false;
-          toast("Uploaded " + name);
-          renderProtocols();
-        })
-        .catch(function(err){ stop(err && err.message ? err.message : "Something went wrong."); });
-    };
-    reader.readAsArrayBuffer(file);
-
-    function stop(msg){
-      go.disabled = false;
-      $("pr_err").innerHTML = '<div class="err" style="margin-top:12px">'+esc(msg)+'</div>';
-      setProgress(0, 1, "Stopped.");
-    }
-
-    /* one page at a time: render, read the text, upload, record */
-    function runPages(){
-      var n = 0;
-      function next(){
-        n++;
-        if(n > total) return Promise.resolve();
-        setProgress(n-1, total, "Page " + n + " of " + total + "\u2026");
-        return onePage(n).then(next);
-      }
-      return next();
-    }
-
-    function onePage(n){
-      return pdf.getPage(n).then(function(page){
-        var vp1 = page.getViewport({ scale:1 });
-        var scale = PDF_SCALE_WIDTH / vp1.width;
-        var vp = page.getViewport({ scale: scale });
-        var canvas = document.createElement("canvas");
-        canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height);
-        var ctx = canvas.getContext("2d");
-
-        return page.render({ canvasContext:ctx, viewport:vp }).promise
-          .then(function(){ return page.getTextContent(); })
-          .then(function(tc){
-            var text = tc.items.map(function(i){ return i.str; }).join(" ")
-                         .replace(/\s+/g," ").trim();
-            return new Promise(function(resolve, reject){
-              canvas.toBlob(function(blob){
-                if(!blob) return reject(new Error("Could not turn page " + n + " into an image."));
-                var path = orgId + "/protocols/" + setId + "/p"
-                         + String(n).padStart(4,"0") + ".jpg";
-                db.storage.from("org-media").upload(path, blob, {
-                  contentType:"image/jpeg", upsert:true
-                }).then(function(up){
-                  if(up.error) return reject(new Error(
-                    "Upload blocked on page " + n + ": " + up.error.message));
-                  return db.from("protocol_pages").insert({
-                    org_id: orgId, set_id: setId, page_number: n,
-                    image_path: path, body_text: text
-                  });
-                }).then(function(ins){
-                  if(ins && ins.error) return reject(ins.error);
-                  canvas.width = canvas.height = 0;   // let the memory go
-                  resolve();
-                }).catch(reject);
-              }, "image/jpeg", PDF_QUALITY);
-            });
-          });
-      });
-    }
-
-    /* if the PDF has bookmarks, they become the contents list */
-    function saveOutline(outline, sid, doc){
-      if(!outline || !outline.length) return Promise.resolve();
-      setProgress(total, total, "Reading the contents list\u2026");
-      var entries = [], order = 0;
-
-      function walk(items, depth){
-        return items.reduce(function(chain, it){
-          return chain.then(function(){
-            return Promise.resolve()
-              .then(function(){ return doc.getDestination(it.dest); })
-              .then(function(dest){
-                if(!dest) return null;
-                return doc.getPageIndex(dest[0]);
-              })
-              .then(function(idx){
-                if(idx != null){
-                  order++;
-                  entries.push({ org_id:orgId, set_id:sid, name:it.title,
-                                 page_number: idx + 1, sort_order: order });
-                }
-                if(it.items && it.items.length && depth < 2) return walk(it.items, depth+1);
-              })
-              .catch(function(){ /* a bad bookmark should not stop the upload */ });
-          });
-        }, Promise.resolve());
+          + '<p class="hint" style="margin-top:12px">Changes save as you make them. Editing a row '
+          + 'here changes what a person gets the next time they open the app.</p></div>';
       }
 
-      return walk(outline, 0).then(function(){
-        if(!entries.length) return null;
-        return db.from("protocol_toc").insert(entries);
-      });
-    }
-  }
+      /* people who signed in but have no unit */
+      if(unplaced.length){
+        html += '<div class="card"><h2>Waiting for a unit</h2>'
+          + '<p class="hint">These people signed in with a valid organization email but were not '
+          + 'on the roster. Give them a unit and they get its role and settings straight away.</p>'
+          + '<div class="scroller"><table><thead><tr><th>Who</th><th>Email</th>'
+          + '<th>Give them</th><th></th></tr></thead><tbody>';
 
-  /* ================= CONTENT =================
-     The lists that are not big enough to deserve their own tab: the
-     directory, apartment complexes, the vitals reference, the CPR buttons
-     and the document types. All edited the same way - change a box, click
-     out, saved. */
-
-  var CONTENT_SETS = {
-    directory: {
-      table: "directory_entries", label: "Directory",
-      hint: "Everyone in the org, including people who are not responders. Dates of birth and addresses stay hidden from ordinary members unless you allow them under Organization.",
-      order: "sort_order",
-      cols: [
-        { f:"sort_order",   l:"#",       w:"56px",  num:true },
-        { f:"entry_type",   l:"Type",    w:"110px" },
-        { f:"first_name",   l:"First" },
-        { f:"last_name",    l:"Last" },
-        { f:"unit_number",  l:"Unit",    w:"80px" },
-        { f:"phone",        l:"Phone",   w:"130px" },
-        { f:"level",        l:"Level",   w:"80px" },
-        { f:"address",      l:"Address" },
-        { f:"date_of_birth",l:"DOB",     w:"120px" },
-        { f:"is_active",    l:"Active",  w:"60px", bool:true }
-      ],
-      blank: { entry_type:"Responder", is_active:true, sort_order:999 }
-    },
-    complexes: {
-      table: "complexes", label: "Apartment complexes",
-      hint: "The building pins themselves are placed on the map in the member app, not here.",
-      order: "sort_order",
-      cols: [
-        { f:"sort_order", l:"#",       w:"56px", num:true },
-        { f:"name",       l:"Name" },
-        { f:"address",    l:"Address" },
-        { f:"map_path",   l:"Map image" },
-        { f:"gate_code",  l:"Gate code", w:"110px" },
-        { f:"is_active",  l:"Active",  w:"60px", bool:true }
-      ],
-      blank: { is_active:true, sort_order:999 }
-    },
-    vitals: {
-      table: "vitals_reference", label: "Vitals reference",
-      hint: "The adult and paediatric checklists.",
-      order: "sort_order",
-      cols: [
-        { f:"sort_order", l:"#",       w:"56px", num:true },
-        { f:"tab",        l:"Tab",     w:"110px" },
-        { f:"section",    l:"Section", w:"150px" },
-        { f:"item",       l:"Item" },
-        { f:"value1",     l:"Value" },
-        { f:"value2",     l:"Value 2" },
-        { f:"value3",     l:"Value 3" },
-        { f:"is_active",  l:"On",      w:"56px", bool:true }
-      ],
-      blank: { tab:"Adult", is_active:true, sort_order:999 }
-    },
-    cpr: {
-      table: "cpr_buttons", label: "CPR buttons",
-      hint: "The buttons a responder taps during a code, in the order they appear. Action tells the app what to count: Start, log, shock, epi, rhythm, rosc.",
-      order: "sort_order",
-      cols: [
-        { f:"sort_order", l:"#",      w:"56px", num:true },
-        { f:"label",      l:"Button" },
-        { f:"action",     l:"Action", w:"110px" },
-        { f:"color",      l:"Colour", w:"100px" },
-        { f:"is_active",  l:"On",     w:"56px", bool:true }
-      ],
-      blank: { action:"log", is_active:true, sort_order:999 }
-    },
-    uploads: {
-      table: "upload_types", label: "Document types",
-      hint: "What a member can send in from the file uploader.",
-      order: "sort_order",
-      cols: [
-        { f:"sort_order", l:"#",    w:"56px", num:true },
-        { f:"name",       l:"Document type" },
-        { f:"is_active",  l:"On",   w:"56px", bool:true }
-      ],
-      blank: { is_active:true, sort_order:999 }
-    }
-  };
-
-  var CONTENT_SET = "directory";
-
-  function renderContent(){
-    var el = $("tab-content");
-    var set = CONTENT_SETS[CONTENT_SET];
-
-    var picker = '<div class="card"><div class="row">'
-      + Object.keys(CONTENT_SETS).map(function(k){
-          return '<button class="btn js-cset'+(k===CONTENT_SET?" primary":"")+'" data-k="'+k+'">'
-            + esc(CONTENT_SETS[k].label) + '</button>';
-        }).join("")
-      + '</div></div>';
-
-    el.innerHTML = picker + '<div class="card"><div class="empty">Loading\u2026</div></div>';
-
-    db.from(set.table).select("*").eq("org_id", orgId).order(set.order)
-      .then(function(r){
-        if(r.error) throw r.error;
-        var rows = r.data || [];
-
-        var html = picker
-          + '<div class="card"><h2>'+esc(set.label)+'</h2>'
-          + '<p class="hint">'+esc(set.hint)+'</p>'
-          + '<p class="hint">'+rows.length+' entries. Change a box and click out to save.</p>'
-          + '<div class="row" style="margin-bottom:12px">'
-          +   '<button id="ct_add" class="btn primary">Add a row</button></div>';
-
-        if(!rows.length){
-          html += '<div class="empty">Nothing here yet.</div></div>';
-          el.innerHTML = html; wireContent(); return;
-        }
-
-        html += '<div class="scroller"><table><thead><tr>'
-          + set.cols.map(function(c){
-              return '<th'+(c.w?' style="width:'+c.w+'"':'')+'>'+esc(c.l)+'</th>'; }).join("")
-          + '<th></th></tr></thead><tbody>';
-
-        rows.forEach(function(row){
-          html += '<tr>' + set.cols.map(function(c){
-            if(c.bool){
-              return '<td style="text-align:center"><input type="checkbox" class="js-cbool" '
-                + 'data-id="'+row.id+'" data-f="'+c.f+'" '+(row[c.f]?"checked":"")+'></td>';
-            }
-            return '<td><input class="js-cin" data-id="'+row.id+'" data-f="'+c.f+'" '
-              + 'value="'+esc(row[c.f]==null?"":row[c.f])+'"'+(c.num?' inputmode="decimal"':'')+'></td>';
-          }).join("")
-          + '<td class="actions"><button class="xbtn js-cdel" data-id="'+row.id+'" '
-          + 'title="Delete">\u00D7</button></td></tr>';
+        unplaced.forEach(function(m){
+          var p = people[m.user_id] || {};
+          html += '<tr>'
+            + '<td><b>'+esc(m.display_name || p.full_name || "\u2014")+'</b></td>'
+            + '<td class="small">'+esc(p.email||"")+'</td>'
+            + '<td><select class="js-assign" data-m="'+m.id+'">'
+            +   '<option value="">Choose a unit\u2026</option>'
+            +   freeSlots.map(function(s){
+                  return '<option value="'+s.id+'">'+esc(s.unit_number)
+                    + (s.display_name ? " \u00B7 " + esc(s.display_name) : "") + '</option>';
+                }).join("")
+            + '</select></td>'
+            + '<td class="actions"><button class="btn danger js-reject" data-id="'+m.id+'" '
+            +   'style="padding:7px 11px;font-size:13px">Remove</button></td>'
+            + '</tr>';
         });
-
         html += '</tbody></table></div></div>';
-        el.innerHTML = html;
-        wireContent();
-      }).catch(function(e){
-        el.innerHTML = picker + '<div class="card"><div class="err">'
-          + esc(e.message||"Could not load") + '</div></div>';
-      });
-  }
-
-  function wireContent(){
-    Array.prototype.forEach.call(document.querySelectorAll(".js-cset"), function(b){
-      b.addEventListener("click", function(){
-        CONTENT_SET = b.getAttribute("data-k");
-        renderContent();
-      });
-    });
-    var add = $("ct_add");
-    if(add) add.addEventListener("click", function(){
-      var set = CONTENT_SETS[CONTENT_SET];
-      var row = { org_id: orgId };
-      for(var k in set.blank) row[k] = set.blank[k];
-      add.disabled = true;
-      db.from(set.table).insert(row).then(function(r){
-        add.disabled = false;
-        if(r.error) return oops(r.error);
-        renderContent();
-      }).catch(function(e){ add.disabled = false; oops(e); });
-    });
-  }
-
-  /* ================= IMAGES =================
-     Apartment maps, cabinet photos and tile icons. Drop in a whole folder
-     at once. Files go to this organization's own storage, so one chapter's
-     maps are never visible to another. */
-
-  var MEDIA_KINDS = [
-    { key:"apartments", label:"Apartment maps",
-      hint:"One image per complex. The file name becomes the complex name unless it already exists." },
-    { key:"cabinets", label:"Cabinet photos",
-      hint:"The photos behind the equipment finder." },
-    { key:"tile-icons", label:"Home screen icons",
-      hint:"Matched to tiles by file name." },
-    { key:"media", label:"Anything else", hint:"" }
-  ];
-
-  var MEDIA_QUEUE = null;
-
-  function renderMedia(){
-    var el = $("tab-media");
-    el.innerHTML =
-      '<div class="card"><h2>Upload images</h2>'
-      + '<p class="hint">Pick a whole folder or select many files at once. Nothing is '
-      + 'overwritten unless the file name matches something already there.</p>'
-      + '<div class="grid2">'
-      +   '<div class="f"><label>What are these?</label><select id="md_kind">'
-      +     MEDIA_KINDS.map(function(k){
-              return '<option value="'+k.key+'">'+esc(k.label)+'</option>'; }).join("")
-      +   '</select></div>'
-      +   '<div class="f"><label>Files</label>'
-      +     '<input id="md_files" type="file" multiple accept="image/*"></div>'
-      + '</div>'
-      + '<p class="hint" id="md_hint">'+esc(MEDIA_KINDS[0].hint)+'</p>'
-      + '<button id="md_go" class="btn primary hidden">Upload</button>'
-      + '<div id="md_progress" class="hidden" style="margin-top:14px">'
-      +   '<div class="bar-outer"><div id="md_bar" class="bar-inner"></div></div>'
-      +   '<div id="md_status" class="mono">\u2014</div>'
-      + '</div>'
-      + '<div id="md_out" style="margin-top:12px"></div></div>'
-
-      + '<div class="card"><h2>Already uploaded</h2><div id="md_list">'
-      + '<div class="empty">Loading\u2026</div></div></div>';
-
-    wireMedia();
-    listMedia();
-  }
-
-  function wireMedia(){
-    var kind = $("md_kind"), files = $("md_files");
-    if(!kind) return;
-    kind.addEventListener("change", function(){
-      for(var i=0;i<MEDIA_KINDS.length;i++){
-        if(MEDIA_KINDS[i].key === kind.value) $("md_hint").textContent = MEDIA_KINDS[i].hint;
       }
-      listMedia();
+
+      html += '<div class="card"><h2>Import your roster</h2>'
+        + '<p class="hint">Upload your Members sheet. Recognised headings: First Name, Last Name, '
+        + 'Unit, Email, Admin, Dispatcher, Active, Status. Admin and Dispatcher are separate \u2014 '
+        + 'a person can be either, both or neither.</p>'
+        + '<p class="hint">Importing again updates people by unit number rather than duplicating '
+        + 'them, so it is safe to re-upload a corrected sheet.</p>'
+        + '<div class="f"><input id="mi_file" type="file" accept=".csv,.xlsx,.xls"></div>'
+        + '<div id="mi_out"></div></div>';
+
+      el.innerHTML = html;
+      wireMemberImport();
+    }).catch(function(e){
+      el.innerHTML = '<div class="card"><div class="err">'
+        + esc(e.message||"Could not load the roster") + '</div></div>';
     });
-    files.addEventListener("change", function(e){
-      MEDIA_QUEUE = Array.prototype.slice.call(e.target.files || []);
-      var go = $("md_go");
-      if(!MEDIA_QUEUE.length){ go.classList.add("hidden"); return; }
-      var mb = MEDIA_QUEUE.reduce(function(a,f){ return a + f.size; }, 0) / 1048576;
-      $("md_out").innerHTML = '<div class="warn">'+MEDIA_QUEUE.length
-        + ' files, ' + mb.toFixed(1) + ' MB in total.</div>';
-      go.classList.remove("hidden");
-      go.textContent = "Upload " + MEDIA_QUEUE.length + " images";
-    });
-  }
-
-  function mediaPath(kind, name){
-    var clean = String(name).toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
-    return orgId + "/" + kind + "/" + clean;
-  }
-
-  function uploadMedia(){
-    if(!MEDIA_QUEUE || !MEDIA_QUEUE.length) return;
-    var kind = $("md_kind").value;
-    var go = $("md_go"); go.disabled = true;
-    $("md_progress").classList.remove("hidden");
-
-    var done = 0, failed = [], total = MEDIA_QUEUE.length;
-
-    function step(i){
-      if(i >= total){
-        go.disabled = false;
-        $("md_status").textContent = failed.length
-          ? (done + " uploaded, " + failed.length + " failed")
-          : (done + " uploaded");
-        $("md_out").innerHTML = failed.length
-          ? '<div class="err">These did not upload:<br>' + failed.map(esc).join("<br>") + '</div>'
-          : '<div class="warn">All ' + done + ' uploaded.</div>';
-        MEDIA_QUEUE = null;
-        $("md_files").value = "";
-        if(kind === "apartments") linkApartments();
-        else if(kind === "tile-icons") linkTileIcons();
-        listMedia();
-        return;
-      }
-      var f = MEDIA_QUEUE[i];
-      $("md_bar").style.width = Math.round(i/total*100) + "%";
-      $("md_status").textContent = (i+1) + " of " + total + " \u00B7 " + f.name;
-
-      db.storage.from("org-branding")
-        .upload(mediaPath(kind, f.name), f, { upsert:true, contentType:f.type || "image/jpeg" })
-        .then(function(r){
-          if(r.error) failed.push(f.name + " (" + r.error.message + ")"); else done++;
-          step(i+1);
-        })
-        .catch(function(){ failed.push(f.name); step(i+1); });
-    }
-    step(0);
-  }
-
-  function publicUrl(path){
-    var r = db.storage.from("org-branding").getPublicUrl(path);
-    return (r && r.data && r.data.publicUrl) || "";
-  }
-
-  /* a map with no complex behind it is invisible, so make one */
-  function linkApartments(){
-    db.storage.from("org-branding").list(orgId + "/apartments", { limit: 500 })
-      .then(function(r){
-        var files = (r.data || []).filter(function(f){ return f.name; });
-        if(!files.length) return;
-        return db.from("complexes").select("id,name,map_path").eq("org_id", orgId)
-          .then(function(ex){
-            var have = {};
-            (ex.data || []).forEach(function(c){
-              have[String(c.map_path||"").split("/").pop()] = c;
-            });
-            var add = [];
-            files.forEach(function(f){
-              if(have[f.name]) return;
-              var stem = f.name.replace(/\.[a-z0-9]+$/i, "");
-              add.push({
-                org_id: orgId,
-                name: stem.replace(/[-_]+/g, " ").replace(/\b\w/g, function(c){ return c.toUpperCase(); }),
-                map_path: publicUrl(orgId + "/apartments/" + f.name),
-                is_active: true, sort_order: 500
-              });
-            });
-            if(!add.length) return;
-            return db.from("complexes").insert(add).then(function(){
-              toast("Created " + add.length + " apartment complexes");
-            });
-          });
-      }).catch(function(){});
-  }
-
-  /* match uploaded icons to tiles by file name */
-  function linkTileIcons(){
-    db.storage.from("org-branding").list(orgId + "/tile-icons", { limit: 200 })
-      .then(function(r){
-        var files = (r.data || []).filter(function(f){ return f.name; });
-        if(!files.length) return;
-        return db.from("tiles").select("id,label,image_path").eq("org_id", orgId)
-          .then(function(t){
-            var jobs = [];
-            (t.data || []).forEach(function(tile){
-              var want = String(tile.image_path || "").split("/").pop().toLowerCase()
-                           .replace(/[^a-z0-9._-]+/g, "-");
-              if(!want) return;
-              for(var i=0;i<files.length;i++){
-                if(files[i].name.toLowerCase() === want){
-                  jobs.push(db.from("tiles")
-                    .update({ image_path: publicUrl(orgId + "/tile-icons/" + files[i].name) })
-                    .eq("id", tile.id));
-                  break;
-                }
-              }
-            });
-            if(jobs.length) return Promise.all(jobs).then(function(){
-              toast("Linked " + jobs.length + " tile icons");
-            });
-          });
-      }).catch(function(){});
-  }
-
-  function listMedia(){
-    var kind = $("md_kind") ? $("md_kind").value : "apartments";
-    var box = $("md_list");
-    if(!box) return;
-    box.innerHTML = '<div class="empty">Loading\u2026</div>';
-    db.storage.from("org-branding").list(orgId + "/" + kind, { limit: 500 })
-      .then(function(r){
-        var files = (r.data || []).filter(function(f){ return f.name; });
-        if(!files.length){
-          box.innerHTML = '<div class="empty">Nothing uploaded here yet.</div>';
-          return;
-        }
-        box.innerHTML = '<p class="hint">'+files.length+' files.</p>'
-          + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:9px">'
-          + files.slice(0, 120).map(function(f){
-              var u = publicUrl(orgId + "/" + kind + "/" + f.name);
-              return '<div style="border:1px solid var(--line);border-radius:9px;overflow:hidden;'
-                + 'background:#fff"><img src="'+esc(u)+'" alt="" style="width:100%;height:80px;'
-                + 'object-fit:cover;display:block"><div class="small" style="padding:5px 7px;'
-                + 'word-break:break-all">'+esc(f.name)+'</div></div>';
-            }).join("")
-          + '</div>'
-          + (files.length > 120 ? '<p class="hint">Showing the first 120.</p>' : '');
-      }).catch(function(e){
-        box.innerHTML = '<div class="err">'+esc(e.message||"Could not list files")+'</div>';
-      });
   }
 
   /* ---------- importing a roster ---------- */
@@ -1432,7 +468,8 @@
           }
           var cF = col("first name","first"), cL = col("last name","last"),
               cU = col("unit","unit #"), cA = col("admin"),
-              cD = col("dispatcher"), cAc = col("active"), cS = col("status");
+              cD = col("dispatcher"), cAc = col("active"), cS = col("status"),
+              cE = col("email","email address","e-mail");
           if(cU < 0){ throw new Error("No column named Unit was found."); }
 
           var yes = function(v){
@@ -1447,6 +484,7 @@
             rows.push({
               unit_number: unit,
               display_name: nm || null,
+              email: (cE>-1 ? String(r[cE]||"").trim().toLowerCase() : "") || null,
               role: (cA>-1 && yes(r[cA])) ? "admin" : "member",
               is_dispatcher: cD>-1 ? yes(r[cD]) : false,
               status: (cAc<0 || yes(r[cAc])) ? "active" : "suspended",
@@ -1488,9 +526,11 @@
     var b = $("mi_go"); b.disabled = true; b.textContent = "Importing\u2026";
     db.from("roster_slots").upsert(
       MEMBER_ROWS.map(function(r){
-        return { org_id: orgId, unit_number: r.unit_number, display_name: r.display_name,
-                 role: r.role, is_dispatcher: r.is_dispatcher,
-                 duty_status: r.duty_status, status: r.status };
+        var o = { org_id: orgId, unit_number: r.unit_number, display_name: r.display_name,
+                  role: r.role, is_dispatcher: r.is_dispatcher,
+                  duty_status: r.duty_status, status: r.status };
+        if(r.email) o.email = r.email;
+        return o;
       }), { onConflict: "org_id,unit_number" }
     ).then(function(r){
       b.disabled = false; b.textContent = "Import";
@@ -1878,6 +918,21 @@
         .then(function(r){ if(r.error) return oops(r.error); toast("Suspended"); renderMembers(); });
       return;
     }
+    var rd = t.closest(".js-rdel");
+    if(rd){
+      if(!confirm("Remove unit " + rd.getAttribute("data-name") + " from the roster?")) return;
+      db.from("roster_slots").delete().eq("id", rd.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error); toast("Removed"); renderMembers(); });
+      return;
+    }
+    var rj = t.closest(".js-reject");
+    if(rj){
+      if(!confirm("Remove this person's access?")) return;
+      db.from("memberships").update({status:"removed"}).eq("id", rj.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error); toast("Removed"); renderMembers(); });
+      return;
+    }
+
     var cd = t.closest(".js-cdel");
     if(cd){
       if(!confirm("Delete this row?")) return;
@@ -1969,6 +1024,27 @@
         .then(function(r){ if(r.error) return oops(r.error); toast("Saved"); renderTiles(); });
       return;
     }
+    if(el.classList && el.classList.contains("js-rchk")){
+      var rp = {}; rp[el.getAttribute("data-f")] = el.checked;
+      db.from("roster_slots").update(rp).eq("id", el.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error); toast("Saved"); });
+      return;
+    }
+    if(el.classList && el.classList.contains("js-rsel")){
+      var rs2 = {}; rs2[el.getAttribute("data-f")] = el.value;
+      db.from("roster_slots").update(rs2).eq("id", el.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error); toast("Saved"); });
+      return;
+    }
+    if(el.classList && el.classList.contains("js-assign")){
+      if(!el.value) return;
+      db.rpc("assign_slot", { p_membership: el.getAttribute("data-m"), p_slot: el.value })
+        .then(function(r){
+          if(r.error) return oops(r.error);
+          toast("Unit assigned"); renderMembers();
+        }).catch(oops);
+      return;
+    }
     if(el.classList && el.classList.contains("js-cbool")){
       var cp = {}; cp[el.getAttribute("data-f")] = el.checked;
       db.from(CONTENT_SETS[CONTENT_SET].table).update(cp).eq("id", el.getAttribute("data-id"))
@@ -1995,6 +1071,13 @@
   /* inline edits save on blur */
   document.addEventListener("blur", function(e){
     var i = e.target;
+    if(i.classList && i.classList.contains("js-rs")){
+      var rf = i.getAttribute("data-f"), rv = i.value.trim();
+      var rp2 = {}; rp2[rf] = rv || null;
+      db.from("roster_slots").update(rp2).eq("id", i.getAttribute("data-id"))
+        .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
+      return;
+    }
     if(i.classList && i.classList.contains("js-cin")){
       var set = CONTENT_SETS[CONTENT_SET];
       var cf = i.getAttribute("data-f"), cv = i.value.trim();

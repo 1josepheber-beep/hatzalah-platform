@@ -1340,12 +1340,24 @@
   }
 
   /* build STATE.me from the roster, in the shape the app already expects */
-  function sbLoadMe(){
+  function sbLoadMe(tried){
     return SB.from("memberships")
       .select("user_id,unit_number,display_name,role,status,duty_status,cert_level,is_dispatcher")
       .eq("org_id", ORG.org_id).maybeSingle()
       .then(function(r){
         var m = r.data;
+
+        /* First time this person has signed in to this organization.
+           join_org puts them on the roster: straight into their own unit
+           if the roster carries their email, otherwise waiting for an
+           administrator to approve them. */
+        if(!m && !tried){
+          return SB.rpc("join_org", { p_code: ORG.code }).then(function(j){
+            var res = (j.data && j.data.length) ? j.data[0] : null;
+            if(res && res.status === "error"){ return { blocked:"error", why:res.message }; }
+            return sbLoadMe(true);
+          }).catch(function(){ return null; });
+        }
         if(!m) return null;
         if(m.status !== "active"){
           return { blocked: m.status };
@@ -1387,9 +1399,10 @@
         return;
       }
       if(me.blocked){
-        if(err) err.textContent = (me.blocked === "pending")
-          ? "Your account is waiting for an administrator to approve it."
-          : "Your access has been " + me.blocked + ".";
+        if(err) err.textContent = me.why ? me.why
+          : (me.blocked === "pending"
+              ? "Your account is waiting for an administrator to approve it."
+              : "Your access has been " + me.blocked + ".");
         return;
       }
       sbAfterSignIn();
