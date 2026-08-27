@@ -97,6 +97,7 @@
   .warn{background:#FFF8E6;border:1px solid #E8CE86;color:#6B520C;
     padding:10px 12px;border-radius:9px;font-size:13.5px;margin-bottom:13px}
   .empty{text-align:center;color:var(--muted);padding:30px}
+  tr.chosen td{background:#EEF3FB}
   .binwrap{position:relative;display:inline-block;max-width:100%;border:1px solid var(--line);
     border-radius:10px;overflow:hidden;cursor:crosshair;user-select:none}
   .binwrap img{display:block;max-width:100%;height:auto;pointer-events:none}
@@ -2900,36 +2901,50 @@
 
         var html = '<div class="card"><h2>Cabinets</h2>'
           + '<p class="hint">A photo of each cabinet, with a box drawn over every bin. '
-          + 'Responders tap a box to find what is in it.</p>'
-          + '<div class="row" style="margin-bottom:12px">'
+          + 'Responders tap a box to find what is in it. The order here is the order they '
+          + 'appear in the app.</p>'
+          + dragHint()
+          + '<div class="scroller narrow"><table><thead><tr><th style="width:44px"></th>'
+          +   '<th>Cabinet</th><th style="width:110px">Bins</th><th style="width:120px"></th>'
+          +   '<th style="width:56px"></th></tr></thead><tbody id="sortRows_cabinets">'
           +   cabs.map(function(c){
-                return '<button class="btn js-cab'+(c.id===CAB_ID?" primary":"")+'" '
-                  + 'data-id="'+c.id+'">'+esc(c.name)+'</button>';
+                return '<tr draggable="true" class="js-sortrow'
+                  + (c.id===CAB_ID?" chosen":"")+'" data-id="'+c.id+'">'
+                  + '<td class="draghandle" title="Drag to move">\u2630</td>'
+                  + '<td><input class="js-cabf" data-id="'+c.id+'" data-f="name" '
+                  +   'value="'+esc(c.name||"")+'"></td>'
+                  + '<td class="small">'+(c.photo_path ? "photo set" : "no photo yet")+'</td>'
+                  + '<td><button class="btn js-cab" data-id="'+c.id+'" '
+                  +   'style="padding:6px 11px;font-size:13px">'
+                  +   (c.id===CAB_ID ? "Editing" : "Edit bins")+'</button></td>'
+                  + '<td class="actions"><button class="xbtn js-cabdel" data-id="'+c.id+'" '
+                  +   'title="Delete">\u00D7</button></td></tr>';
               }).join("")
-          +   '<button id="cab_new" class="btn">Add a cabinet</button>'
-          + '</div>';
+          + '</tbody></table></div>'
+          + '<div class="row" style="margin-top:12px">'
+          +   '<button id="cab_new" class="btn primary">Add a cabinet</button></div>';
 
         if(!cabs.length){
           html += '<div class="empty">No cabinets yet. Add one, then upload a photo of it.</div>'
                +  '</div>';
-          el.innerHTML = html; wireCabinets([]); return;
+          el.innerHTML = html; wireCabinets([]);
+          makeSortable("sortRows_cabinets", "cabinets"); return;
         }
 
-        html += '<div class="grid2">'
-          + '<div class="f"><label>Name</label>'
-          +   '<input id="cab_name" value="'+esc(CAB_ROW.name||"")+'"></div>'
-          + '<div class="f"><label>Photo</label><div class="row">'
+        html += '<div class="f" style="margin-top:14px"><label>Photo of '
+          + esc(CAB_ROW.name||"this cabinet")+'</label><div class="row">'
           +   '<label class="btn" style="cursor:pointer">Choose a photo'
           +     '<input type="file" id="cab_photo" accept="image/*" style="display:none"></label>'
-          +   '<button id="cab_del" class="btn danger">Delete this cabinet</button>'
-          + '</div></div></div></div>';
+          + '</div><p class="hint" style="margin:6px 0 0">A photo saves as soon as you pick it. '
+          + 'Everything else waits for Save changes.</p></div></div>';
 
         html += '<div class="card"><h2>Bins in '+esc(CAB_ROW.name||"this cabinet")+'</h2>';
 
         if(!CAB_ROW.photo_path){
           html += '<div class="warn">Upload a photo of this cabinet first. The bins are drawn '
                +  'on top of it.</div></div>';
-          el.innerHTML = html; wireCabinets(cabs); return;
+          el.innerHTML = html; wireCabinets(cabs);
+          makeSortable("sortRows_cabinets", "cabinets"); return;
         }
 
         html += '<p class="hint">Drag a rectangle over a bin to add it. Click a box to rename it '
@@ -2943,6 +2958,7 @@
 
         el.innerHTML = html;
         wireCabinets(cabs);
+        makeSortable("sortRows_cabinets", "cabinets");
         loadBins();
       }).catch(function(e){
         el.innerHTML = '<div class="card"><div class="err">'
@@ -2969,19 +2985,17 @@
         }).catch(oops);
     });
 
-    var nm = $("cab_name");
-    if(nm) nm.addEventListener("blur", function(){
-      db.from("cabinets").update({ name:nm.value.trim() }).eq("id", CAB_ID)
-        .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
-    });
-
-    var dl = $("cab_del");
-    if(dl) dl.addEventListener("click", function(){
-      if(!confirm("Delete this cabinet and every bin on it?")) return;
-      db.from("cabinets").delete().eq("id", CAB_ID).then(function(r){
-        if(r.error) return oops(r.error);
-        CAB_ID = null; toast("Deleted"); renderCabinets();
-      }).catch(oops);
+    Array.prototype.forEach.call(document.querySelectorAll(".js-cabdel"), function(b){
+      b.addEventListener("click", function(ev){
+        ev.stopPropagation();
+        if(!confirm("Delete this cabinet and every bin on it?")) return;
+        var id = b.getAttribute("data-id");
+        db.from("cabinets").delete().eq("id", id).then(function(r){
+          if(r.error) return oops(r.error);
+          if(CAB_ID === id) CAB_ID = null;
+          toast("Deleted"); renderCabinets();
+        }).catch(oops);
+      });
     });
 
     var ph = $("cab_photo");
@@ -3050,14 +3064,6 @@
               + '</tbody></table></div>'
             : '');
 
-      Array.prototype.forEach.call(list.querySelectorAll(".js-binf"), function(inp){
-        inp.addEventListener("blur", function(){
-          var b = CAB_ITEMS[parseInt(inp.getAttribute("data-i"), 10)];
-          var patch = {}; patch[inp.getAttribute("data-f")] = inp.value.trim() || null;
-          db.from("cabinet_items").update(patch).eq("id", b.id)
-            .then(function(r){ if(r.error) oops(r.error); else { toast("Saved"); loadBins(); } });
-        });
-      });
       Array.prototype.forEach.call(list.querySelectorAll(".js-bindel"), function(btn){
         btn.addEventListener("click", function(){
           var b = CAB_ITEMS[parseInt(btn.getAttribute("data-i"), 10)];
@@ -3084,6 +3090,9 @@
       +   '<button id="be_del" class="btn danger">Remove this bin</button>'
       +   '<button id="be_close" class="btn">Close</button></div></div>';
 
+    /* This box has its own Save because you opened it deliberately to change
+       one bin. It writes straight away rather than joining the queue, so the
+       label on the photo updates while you are still looking at it. */
     $("be_save").addEventListener("click", function(){
       db.from("cabinet_items").update({
         name: $("be_name").value.trim() || null,
@@ -3925,6 +3934,18 @@
       var rp2 = {}; rp2[rf] = rv || null;
       db.from("roster_slots").update(rp2).eq("id", i.getAttribute("data-id"))
         .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
+      return;
+    }
+    if(i.classList && i.classList.contains("js-cabf")){
+      markEdit("cabinets", i.getAttribute("data-id"),
+               i.getAttribute("data-f"), i.value.trim() || null);
+      i.classList.add("edited");
+      return;
+    }
+    if(i.classList && i.classList.contains("js-binf")){
+      markEdit("cabinet_items", i.getAttribute("data-bid"),
+               i.getAttribute("data-f"), i.value.trim() || null);
+      i.classList.add("edited");
       return;
     }
     if(i.classList && i.classList.contains("js-ci")){
