@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#143D75">
+<meta name="theme-color" content="#1E2A3A">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Hatzalah</title>
+<title>Responder Sign-in</title>
 <style>
   :root{
-    --brand:#143D75; --brand-deep:#0D2A52; --on-brand:#fff;
+    --brand:#1E2A3A; --brand-deep:#141D28; --on-brand:#fff;
     --ink:#12161C; --muted:#5C6675; --line:#DFE4EC; --bg:#F2F4F8; --card:#fff;
     --red:#B3121B; --green:#1B7F3B;
   }
@@ -140,7 +140,7 @@
 
 <!-- =============== 1. ORGANIZATION CODE =============== -->
 <section id="orgScreen" class="entry">
-  <h1>Hatzalah</h1>
+  <h1 id="platformName">Sign in</h1>
   <p class="sub">Enter your organization code to continue</p>
   <div id="orgErr" class="err hidden"></div>
   <div class="field">
@@ -222,7 +222,15 @@
 
   var SUPABASE_URL = "https://fwjxskdgzzfgqhnabrpa.supabase.co";
   var SUPABASE_KEY = "sb_publishable_vbsCkIpZsk7bh-PjbhIYSw__t9MtXJi";
-  var VERSION      = "3.0";
+  var VERSION      = "3.1";
+
+  /* The platform's own name, shown before anyone picks an organization.
+     Deliberately blank for now: this screen belongs to no single
+     organization, and any volunteer response team could be using it.
+     Put your product name here once you have chosen one, and set
+     PLATFORM_COLOR to match. Nothing else needs changing. */
+  var PLATFORM_NAME  = "";
+  var PLATFORM_COLOR = "#1E2A3A";
 
   var db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
   var $  = function(id){ return document.getElementById(id); };
@@ -343,8 +351,10 @@
   function changeOrg(){
     del("hz_org_code"); del("hz_org");
     org = null;
-    document.documentElement.style.setProperty("--brand", "#143D75");
+    document.documentElement.style.setProperty("--brand", PLATFORM_COLOR);
     document.documentElement.style.setProperty("--on-brand", "#fff");
+    var m = document.querySelector('meta[name="theme-color"]');
+    if(m) m.setAttribute("content", PLATFORM_COLOR);
     show($("app"), false); show($("loginScreen"), false); show($("orgScreen"), true);
     $("orgCode").value = "";
     $("menuScrim").classList.add("hidden");
@@ -648,6 +658,8 @@
   window.addEventListener("offline", function(){ if(screen==="hospitals") renderHospitals(); else renderHome(); });
 
   /* =============== start =============== */
+  if(PLATFORM_NAME) $("platformName").textContent = PLATFORM_NAME;
+
   var savedOrg = get("hz_org");
   if(savedOrg){ org = savedOrg; paintBrand(); }
 
