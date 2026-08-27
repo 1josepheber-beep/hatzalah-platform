@@ -79,6 +79,9 @@
   .warn{background:#FFF8E6;border:1px solid #E8CE86;color:#6B520C;
     padding:10px 12px;border-radius:9px;font-size:13.5px;margin-bottom:13px}
   .empty{text-align:center;color:var(--muted);padding:30px}
+  .bar-outer{height:9px;background:#E3E8F0;border-radius:99px;overflow:hidden;margin:10px 0 6px}
+  .bar-inner{height:100%;background:var(--green);width:0;transition:width .2s}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--muted)}
   .steps{display:flex;flex-direction:column;gap:14px;margin-bottom:4px}
   .step{display:flex;gap:12px;align-items:flex-start}
   .step .n{flex:none;width:26px;height:26px;border-radius:50%;background:var(--brand);
@@ -130,12 +133,14 @@
   <nav>
     <button data-tab="members"   aria-current="true">Members</button>
     <button data-tab="hospitals">Hospitals</button>
+    <button data-tab="protocols">Protocols</button>
     <button data-tab="settings">Organization</button>
     <button data-tab="features">Features</button>
   </nav>
   <main>
     <div id="tab-members"></div>
     <div id="tab-hospitals" class="hidden"></div>
+    <div id="tab-protocols" class="hidden"></div>
     <div id="tab-settings" class="hidden"></div>
     <div id="tab-features" class="hidden"></div>
   </main>
@@ -143,6 +148,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -230,7 +236,7 @@
       Array.prototype.forEach.call(document.querySelectorAll("nav button"), function(x){
         x.setAttribute("aria-current", x === b ? "true" : "false");
       });
-      ["members","hospitals","settings","features"].forEach(function(t){
+      ["members","hospitals","protocols","settings","features"].forEach(function(t){
         $("tab-"+t).classList.toggle("hidden", t !== tab);
       });
       render();
@@ -241,6 +247,7 @@
     if(!org) return;
     if(tab === "members")   renderMembers();
     if(tab === "hospitals") renderHospitals();
+    if(tab === "protocols") renderProtocols();
     if(tab === "settings")  renderSettings();
     if(tab === "features")  renderFeatures();
   }
@@ -734,6 +741,226 @@
     });
   }
 
+  /* ================= PROTOCOLS =================
+     An admin uploads their own protocol PDF. Their browser turns each
+     page into an image AND pulls out the text behind it, then sends both
+     up. Members search the text and get shown the page image, exactly as
+     they are used to reading it. Nobody has to prepare anything for them. */
+
+  var PDF_SCALE_WIDTH = 1400;   // enough to read when zoomed on a phone
+  var PDF_QUALITY     = 0.82;
+
+  function renderProtocols(){
+    var el = $("tab-protocols");
+    el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
+
+    db.from("protocol_sets").select("*").eq("org_id", orgId)
+      .order("created_at", { ascending:false })
+      .then(function(r){
+        if(r.error) throw r.error;
+        var sets = r.data || [];
+
+        var html = '<div class="card"><h2>Upload a protocol book</h2>'
+          + '<p class="hint">Choose the PDF your medical director issued. Every page becomes a '
+          + 'readable image, and the words behind it become searchable. This all happens on '
+          + 'this computer, so a long book takes a few minutes and the browser tab must stay '
+          + 'open.</p>'
+          + '<div class="grid2">'
+          +   '<div class="f"><label>What to call it</label>'
+          +     '<input id="pr_name" placeholder="2026 Patient Care Guidelines"></div>'
+          +   '<div class="f"><label>Version (optional)</label>'
+          +     '<input id="pr_version" placeholder="Rev 3"></div>'
+          + '</div>'
+          + '<div class="f"><label>PDF file</label>'
+          +   '<input id="pr_file" type="file" accept="application/pdf"></div>'
+          + '<button id="pr_go" class="btn primary">Upload and process</button>'
+          + '<div id="pr_progress" class="hidden" style="margin-top:14px">'
+          +   '<div class="bar-outer"><div id="pr_bar" class="bar-inner"></div></div>'
+          +   '<div id="pr_status" class="mono">Starting\u2026</div>'
+          + '</div>'
+          + '<div id="pr_err"></div></div>';
+
+        html += '<div class="card"><h2>Protocol books</h2>';
+        if(!sets.length){
+          html += '<div class="empty">Nothing uploaded yet.</div></div>';
+        } else {
+          html += '<div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Version</th>'
+               +  '<th>Pages</th><th>Members can see it</th><th></th></tr></thead><tbody>';
+          sets.forEach(function(x){
+            html += '<tr>'
+              + '<td><b>'+esc(x.name)+'</b></td>'
+              + '<td>'+esc(x.version||"\u2014")+'</td>'
+              + '<td>'+(x.page_count||0)+'</td>'
+              + '<td><button class="toggle js-pubset" data-id="'+x.id+'" aria-pressed="'
+              +   (x.is_published?"true":"false")+'"><span></span></button></td>'
+              + '<td><button class="btn danger js-delset" data-id="'+x.id+'" '
+              +   'data-name="'+esc(x.name)+'">Delete</button></td>'
+              + '</tr>';
+          });
+          html += '</tbody></table></div>'
+               +  '<p class="hint" style="margin-top:12px">A book stays hidden from members until '
+               +  'you switch it on. Upload first, check it, then publish.</p></div>';
+        }
+        el.innerHTML = html;
+        wireProtocolForm();
+      }).catch(function(e){
+        el.innerHTML = '<div class="card"><div class="err">'
+          + esc(e.message||"Could not load protocols") + '</div></div>';
+      });
+  }
+
+  function setProgress(done, total, msg){
+    $("pr_bar").style.width = total ? Math.round(done/total*100)+"%" : "0%";
+    $("pr_status").textContent = msg;
+  }
+
+  function wireProtocolForm(){
+    var go = $("pr_go");
+    if(!go) return;
+    go.addEventListener("click", function(){
+      var f = $("pr_file").files && $("pr_file").files[0];
+      var name = $("pr_name").value.trim();
+      $("pr_err").innerHTML = "";
+      if(!f){ toast("Choose a PDF first."); return; }
+      if(!name){ toast("Give the book a name."); return; }
+      processPdf(f, name, $("pr_version").value.trim() || null);
+    });
+  }
+
+  function processPdf(file, name, version){
+    var go = $("pr_go");
+    go.disabled = true;
+    $("pr_progress").classList.remove("hidden");
+    setProgress(0, 1, "Opening the PDF\u2026");
+
+    var setId = null, pdf = null, total = 0;
+
+    var reader = new FileReader();
+    reader.onerror = function(){ stop("Could not read that file."); };
+    reader.onload = function(e){
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+
+      pdfjsLib.getDocument({ data:new Uint8Array(e.target.result) }).promise
+        .then(function(doc){
+          pdf = doc; total = doc.numPages;
+          setProgress(0, total, "Found " + total + " pages. Creating the book\u2026");
+          return db.from("protocol_sets").insert({
+            org_id: orgId, name: name, version: version,
+            page_count: total, is_published: false
+          }).select().single();
+        })
+        .then(function(r){
+          if(r.error) throw r.error;
+          setId = r.data.id;
+          return runPages();
+        })
+        .then(function(){
+          return pdf.getOutline().catch(function(){ return null; });
+        })
+        .then(function(outline){ return saveOutline(outline, setId, pdf); })
+        .then(function(){
+          setProgress(total, total, "Done. " + total + " pages ready.");
+          go.disabled = false;
+          toast("Uploaded " + name);
+          renderProtocols();
+        })
+        .catch(function(err){ stop(err && err.message ? err.message : "Something went wrong."); });
+    };
+    reader.readAsArrayBuffer(file);
+
+    function stop(msg){
+      go.disabled = false;
+      $("pr_err").innerHTML = '<div class="err" style="margin-top:12px">'+esc(msg)+'</div>';
+      setProgress(0, 1, "Stopped.");
+    }
+
+    /* one page at a time: render, read the text, upload, record */
+    function runPages(){
+      var n = 0;
+      function next(){
+        n++;
+        if(n > total) return Promise.resolve();
+        setProgress(n-1, total, "Page " + n + " of " + total + "\u2026");
+        return onePage(n).then(next);
+      }
+      return next();
+    }
+
+    function onePage(n){
+      return pdf.getPage(n).then(function(page){
+        var vp1 = page.getViewport({ scale:1 });
+        var scale = PDF_SCALE_WIDTH / vp1.width;
+        var vp = page.getViewport({ scale: scale });
+        var canvas = document.createElement("canvas");
+        canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height);
+        var ctx = canvas.getContext("2d");
+
+        return page.render({ canvasContext:ctx, viewport:vp }).promise
+          .then(function(){ return page.getTextContent(); })
+          .then(function(tc){
+            var text = tc.items.map(function(i){ return i.str; }).join(" ")
+                         .replace(/\s+/g," ").trim();
+            return new Promise(function(resolve, reject){
+              canvas.toBlob(function(blob){
+                if(!blob) return reject(new Error("Could not turn page " + n + " into an image."));
+                var path = orgId + "/protocols/" + setId + "/p"
+                         + String(n).padStart(4,"0") + ".jpg";
+                db.storage.from("org-media").upload(path, blob, {
+                  contentType:"image/jpeg", upsert:true
+                }).then(function(up){
+                  if(up.error) return reject(new Error(
+                    "Upload blocked on page " + n + ": " + up.error.message));
+                  return db.from("protocol_pages").insert({
+                    org_id: orgId, set_id: setId, page_number: n,
+                    image_path: path, body_text: text
+                  });
+                }).then(function(ins){
+                  if(ins && ins.error) return reject(ins.error);
+                  canvas.width = canvas.height = 0;   // let the memory go
+                  resolve();
+                }).catch(reject);
+              }, "image/jpeg", PDF_QUALITY);
+            });
+          });
+      });
+    }
+
+    /* if the PDF has bookmarks, they become the contents list */
+    function saveOutline(outline, sid, doc){
+      if(!outline || !outline.length) return Promise.resolve();
+      setProgress(total, total, "Reading the contents list\u2026");
+      var entries = [], order = 0;
+
+      function walk(items, depth){
+        return items.reduce(function(chain, it){
+          return chain.then(function(){
+            return Promise.resolve()
+              .then(function(){ return doc.getDestination(it.dest); })
+              .then(function(dest){
+                if(!dest) return null;
+                return doc.getPageIndex(dest[0]);
+              })
+              .then(function(idx){
+                if(idx != null){
+                  order++;
+                  entries.push({ org_id:orgId, set_id:sid, name:it.title,
+                                 page_number: idx + 1, sort_order: order });
+                }
+                if(it.items && it.items.length && depth < 2) return walk(it.items, depth+1);
+              })
+              .catch(function(){ /* a bad bookmark should not stop the upload */ });
+          });
+        }, Promise.resolve());
+      }
+
+      return walk(outline, 0).then(function(){
+        if(!entries.length) return null;
+        return db.from("protocol_toc").insert(entries);
+      });
+    }
+  }
+
   /* ================= ORGANIZATION ================= */
   function renderSettings(){
     var o = org;
@@ -896,6 +1123,26 @@
       });
       return;
     }
+    var ps = t.closest(".js-pubset");
+    if(ps){
+      var on = ps.getAttribute("aria-pressed") !== "true";
+      db.from("protocol_sets").update({is_published:on}).eq("id", ps.getAttribute("data-id"))
+        .then(function(r){
+          if(r.error) return oops(r.error);
+          ps.setAttribute("aria-pressed", on ? "true" : "false");
+          toast(on ? "Members can now see it" : "Hidden from members");
+        });
+      return;
+    }
+    var ds = t.closest(".js-delset");
+    if(ds){
+      if(!confirm("Delete \u201C" + ds.getAttribute("data-name")
+          + "\u201D and all its pages? This cannot be undone.")) return;
+      db.from("protocol_sets").delete().eq("id", ds.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error); toast("Deleted"); renderProtocols(); });
+      return;
+    }
+
     if(t.id === "imp_preview"){ renderPreview(); return; }
     if(t.id === "imp_back"){ renderMapping(); return; }
     if(t.id === "imp_go"){ doImport(); return; }
