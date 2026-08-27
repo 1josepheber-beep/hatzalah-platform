@@ -87,6 +87,10 @@
   .warn{background:#FFF8E6;border:1px solid #E8CE86;color:#6B520C;
     padding:10px 12px;border-radius:9px;font-size:13.5px;margin-bottom:13px}
   .empty{text-align:center;color:var(--muted);padding:30px}
+  .badgepick{display:flex;flex-wrap:wrap;gap:4px}
+  .bchip{font-size:11px;font-weight:650;padding:4px 8px;border-radius:999px;
+    border:1px solid var(--line);background:#fff;color:var(--muted);cursor:pointer}
+  .bchip.on{background:var(--brand);border-color:var(--brand);color:#fff}
   .bar-outer{height:9px;background:#E3E8F0;border-radius:99px;overflow:hidden;margin:10px 0 6px}
   .bar-inner{height:100%;background:var(--green);width:0;transition:width .2s}
   .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--muted)}
@@ -325,14 +329,17 @@
 
     Promise.all([
       db.from("roster_slots").select("*").eq("org_id", orgId).order("unit_number"),
+      db.from("badge_types").select("name,color,sort_order").eq("org_id", orgId)
+        .eq("is_active", true).order("sort_order"),
       db.from("memberships")
-        .select("id,user_id,role,status,unit_number,display_name,is_dispatcher,duty_status")
+        .select("id,user_id,role,status,unit_number,display_name,duty_status,badges")
         .eq("org_id", orgId),
       db.from("profiles").select("id,full_name,email")
     ]).then(function(r){
       if(r[0].error) throw r[0].error;
-      var roster = r[0].data || [], mems = r[1].data || [], people = {};
-      (r[2].data || []).forEach(function(p){ people[p.id] = p; });
+      var roster = r[0].data || [], badgeTypes = r[1].data || [],
+          mems = r[2].data || [], people = {};
+      (r[3].data || []).forEach(function(p){ people[p.id] = p; });
 
       var byUnit = {};
       mems.forEach(function(m){
@@ -365,11 +372,12 @@
         html += '<div class="empty">No roster yet. Import your Members sheet below.</div></div>';
       } else {
         html += '<div class="scroller"><table><thead><tr>'
-          + '<th style="width:76px">Unit</th><th>Name</th><th>Email</th><th style="width:110px">Role</th>'
-          + '<th style="width:80px">Dispatch</th><th style="width:110px">Duty</th>'
-          + '<th style="width:96px">Signed in</th><th></th></tr></thead><tbody>';
+          + '<th style="width:76px">Unit</th><th>Name</th><th>Email</th>'
+          + '<th style="width:120px">Can do</th><th style="width:200px">Badges</th>'
+          + '<th style="width:120px">Duty</th>'
+          + '<th style="width:90px">Signed in</th><th></th></tr></thead><tbody>';
 
-        roster.forEach(function(s){
+        shown.forEach(function(s){
           var m = byUnit[String(s.unit_number).toLowerCase()];
           html += '<tr>'
             + '<td><input class="js-rs" data-id="'+s.id+'" data-f="unit_number" '
@@ -379,14 +387,24 @@
             + '<td><input class="js-rs" data-id="'+s.id+'" data-f="email" '
             +   'value="'+esc(s.email||"")+'" placeholder="not set"></td>'
             + '<td><select class="js-rsel" data-id="'+s.id+'" data-f="role">'
-            +   ["member","admin","guest"].map(function(x){
-                  return '<option value="'+x+'"'+(s.role===x?" selected":"")+'>'+x+'</option>';
+            +   [["member","Responder"],["dispatcher","Dispatcher"],
+                 ["admin","Administrator"],["guest","Guest"]].map(function(x){
+                  return '<option value="'+x[0]+'"'+(s.role===x[0]?" selected":"")+'>'+x[1]+'</option>';
                 }).join("")
             + '</select></td>'
-            + '<td style="text-align:center"><input type="checkbox" class="js-rchk" '
-            +   'data-id="'+s.id+'" data-f="is_dispatcher" '+(s.is_dispatcher?"checked":"")+'></td>'
-            + '<td><input class="js-rs" data-id="'+s.id+'" data-f="duty_status" '
-            +   'value="'+esc(s.duty_status||"")+'" style="width:100px"></td>'
+            + '<td><div class="badgepick">'
+            +   badgeTypes.map(function(b){
+                  var on = (s.badges||[]).indexOf(b.name) > -1;
+                  return '<button class="bchip js-badge'+(on?" on":"")+'" data-id="'+s.id+'" '
+                    + 'data-b="'+esc(b.name)+'">'+esc(b.name)+'</button>';
+                }).join("")
+            + '</div></td>'
+            + '<td><select class="js-rsel" data-id="'+s.id+'" data-f="duty_status">'
+            +   ["","Primary","Backup","Observer","Off"].map(function(x){
+                  return '<option value="'+esc(x)+'"'+((s.duty_status||"")===x?" selected":"")+'>'
+                    + (x||"\u2014")+'</option>';
+                }).join("")
+            + '</select></td>'
             + '<td>' + (m
                 ? '<span class="pill active">yes</span>'
                 : '<span class="pill pending">not yet</span>') + '</td>'
@@ -437,6 +455,20 @@
 
       el.innerHTML = html;
       wireMemberImport();
+      Array.prototype.forEach.call(document.querySelectorAll(".js-rfilter"), function(b){
+        b.addEventListener("click", function(){
+          ROSTER_FILTER = b.getAttribute("data-f"); renderMembers();
+        });
+      });
+      var rs = $("rsearch");
+      if(rs) rs.addEventListener("input", function(){
+        clearTimeout(window.__rst);
+        window.__rst = setTimeout(function(){
+          ROSTER_SEARCH = rs.value; renderMembers();
+          var again = $("rsearch");
+          if(again){ again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+        }, 260);
+      });
     }).catch(function(e){
       el.innerHTML = '<div class="card"><div class="err">'
         + esc(e.message||"Could not load the roster") + '</div></div>';
@@ -918,6 +950,22 @@
         .then(function(r){ if(r.error) return oops(r.error); toast("Suspended"); renderMembers(); });
       return;
     }
+    var bc = t.closest(".js-badge");
+    if(bc){
+      var bid = bc.getAttribute("data-id"), bname = bc.getAttribute("data-b");
+      db.from("roster_slots").select("badges").eq("id", bid).maybeSingle().then(function(g){
+        var list = (g.data && g.data.badges) || [];
+        var at = list.indexOf(bname);
+        if(at > -1) list.splice(at, 1); else list.push(bname);
+        return db.from("roster_slots").update({ badges:list }).eq("id", bid);
+      }).then(function(r){
+        if(r && r.error) return oops(r.error);
+        bc.classList.toggle("on");
+        toast("Saved");
+      }).catch(oops);
+      return;
+    }
+
     var rd = t.closest(".js-rdel");
     if(rd){
       if(!confirm("Remove unit " + rd.getAttribute("data-name") + " from the roster?")) return;
@@ -1022,12 +1070,6 @@
     if(el.classList && el.classList.contains("js-tsel")){
       db.from("tiles").update({ kind: el.value }).eq("id", el.getAttribute("data-id"))
         .then(function(r){ if(r.error) return oops(r.error); toast("Saved"); renderTiles(); });
-      return;
-    }
-    if(el.classList && el.classList.contains("js-rchk")){
-      var rp = {}; rp[el.getAttribute("data-f")] = el.checked;
-      db.from("roster_slots").update(rp).eq("id", el.getAttribute("data-id"))
-        .then(function(r){ if(r.error) return oops(r.error); toast("Saved"); });
       return;
     }
     if(el.classList && el.classList.contains("js-rsel")){
