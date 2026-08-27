@@ -404,26 +404,29 @@
   });
   $("pw").addEventListener("keydown", function(e){ if(e.key==="Enter") $("loginBtn").click(); });
 
-  /* Supabase's messages are short and say nothing about what to do. These
-     are the three reasons a new organization's head cannot get in. */
+  /* A sign-in screen must never tell a stranger whether an address has an
+     account here. Saying "not confirmed" for one address and "no such
+     account" for another is enough to work out who is a member, which for
+     a volunteer EMS roster is exactly what should not leak.
+
+     So every failure says the same thing, and lists the possible causes
+     without confirming which one applies. The person who actually owns the
+     account still has everything they need to fix it. */
   function explainSignIn(msg, email){
     var m = String(msg || "").toLowerCase();
-    if(m.indexOf("not confirmed") > -1){
-      return "This account has not been confirmed. In Supabase, open "
-        + "Authentication \u2192 Users, click " + esc(email) + ", and confirm it \u2014 "
-        + "or turn on Auto Confirm when creating the login.";
-    }
-    if(m.indexOf("invalid login") > -1){
-      return "That email and password do not match an account.<br><br>"
-        + "The three usual reasons: the login was never created in Supabase under "
-        + "Authentication \u2192 Users; the address differs from the one there; or the "
-        + "password has a space on the end from copying it. Use the button below to set "
-        + "a fresh password by email.";
-    }
+
     if(m.indexOf("rate") > -1 || m.indexOf("many") > -1){
       return "Too many attempts. Wait a minute and try again.";
     }
-    return esc(msg || "Sign-in failed.");
+    if(m.indexOf("network") > -1 || m.indexOf("fetch") > -1){
+      return "Could not reach the server. Check the connection and try again.";
+    }
+
+    return "That did not sign you in.<br><br>"
+      + "If you are expecting access, check with whoever set it up that the "
+      + "account exists and has been confirmed. If you know the address is right, "
+      + "use the button below to set a fresh password by email \u2014 the link only "
+      + "goes to that mailbox.";
   }
 
   $("resetBtn").addEventListener("click", function(){

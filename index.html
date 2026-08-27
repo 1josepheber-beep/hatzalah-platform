@@ -1448,7 +1448,17 @@
     }).catch(function(e){
       if(load) load.classList.add("hidden");
       if(btn) btn.disabled = false;
-      if(err) err.textContent = (e && e.message) ? e.message : "Sign-in failed.";
+      /* Never say WHICH part was wrong. A different message for "no such
+         account" and "wrong password" would let anyone test addresses to
+         find out who is on this roster. */
+      var m = String((e && e.message) || "").toLowerCase();
+      if(err) err.textContent =
+        (m.indexOf("rate") > -1 || m.indexOf("many") > -1)
+          ? "Too many attempts. Wait a minute and try again."
+          : (m.indexOf("network") > -1 || m.indexOf("fetch") > -1)
+            ? "Could not reach the server. Check your connection."
+            : "That did not sign you in. Check the address and password, or use "
+              + "Forgot your password.";
     });
   }
 
