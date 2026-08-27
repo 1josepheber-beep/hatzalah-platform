@@ -142,6 +142,8 @@
     <button data-tab="members"   aria-current="true">Members</button>
     <button data-tab="hospitals">Hospitals</button>
     <button data-tab="protocols">Protocols</button>
+    <button data-tab="tiles">Home screen</button>
+    <button data-tab="media">Images</button>
     <button data-tab="settings">Organization</button>
     <button data-tab="features">Features</button>
   </nav>
@@ -149,6 +151,8 @@
     <div id="tab-members"></div>
     <div id="tab-hospitals" class="hidden"></div>
     <div id="tab-protocols" class="hidden"></div>
+    <div id="tab-tiles" class="hidden"></div>
+    <div id="tab-media" class="hidden"></div>
     <div id="tab-settings" class="hidden"></div>
     <div id="tab-features" class="hidden"></div>
   </main>
@@ -168,7 +172,7 @@
   var $  = function(id){ return document.getElementById(id); };
 
   var isSuper = false, orgs = [], orgId = null, org = null;
-  var TABS = ["members","hospitals","protocols","settings","features"];
+  var TABS = ["members","hospitals","protocols","tiles","media","settings","features"];
 
   /* Remember where you were. Refreshing in the middle of data entry and
      landing back on the first tab is maddening. */
@@ -299,6 +303,8 @@
     if(tab === "members")   renderMembers();
     if(tab === "hospitals") renderHospitals();
     if(tab === "protocols") renderProtocols();
+    if(tab === "tiles") renderTiles();
+    if(tab === "media") renderMedia();
     if(tab === "settings")  renderSettings();
     if(tab === "features")  renderFeatures();
   }
@@ -310,7 +316,7 @@
 
     Promise.all([
       db.from("memberships")
-        .select("id,user_id,role,status,unit_number,display_name,cert_level,duty_status")
+        .select("id,user_id,role,status,unit_number,display_name,cert_level,duty_status,is_dispatcher")
         .eq("org_id", orgId),
       db.from("profiles").select("id,full_name,email,phone")
     ]).then(function(r){
@@ -336,6 +342,15 @@
              +  'They signed up with an organization email but cannot see anything yet.</div>';
       }
 
+      html += '<div class="card"><h2>Import your roster</h2>'
+        + '<p class="hint">Paste or upload your Members list. Recognised headings: '
+        + 'First Name, Last Name, Unit, Admin, Dispatcher, Active, Status. '
+        + 'Admin and Dispatcher are separate \u2014 a person can be either, both or neither.</p>'
+        + '<p class="hint">This sets up who is who. Each person still signs in with their own '
+        + 'email address the first time.</p>'
+        + '<div class="f"><input id="mi_file" type="file" accept=".csv,.xlsx,.xls"></div>'
+        + '<div id="mi_out"></div></div>';
+
       html += '<div class="card"><h2>Members</h2>'
            +  '<p class="hint">'+rows.length+' on the roster. '
            +  'Approve new sign-ups, set roles, or suspend access here.</p>';
@@ -346,7 +361,8 @@
       }
 
       html += '<div class="scroller"><table><thead><tr>'
-           +  '<th>Name</th><th>Unit</th><th>Role</th><th>Status</th><th></th>'
+           +  '<th>Name</th><th>Unit</th><th>Role</th><th>Dispatcher</th>'
+           +  '<th>Duty</th><th>Status</th><th></th>'
            +  '</tr></thead><tbody>';
 
       rows.forEach(function(m){
@@ -359,6 +375,10 @@
                 return '<option value="'+rr+'"'+(m.role===rr?" selected":"")+'>'+rr+'</option>';
               }).join("")
           + '</select></td>'
+          + '<td style="text-align:center"><input type="checkbox" class="js-disp" '
+          +   'data-id="'+m.id+'" '+(m.is_dispatcher?"checked":"")+'></td>'
+          + '<td><input class="js-duty" data-id="'+m.id+'" value="'+esc(m.duty_status||"")+'" '
+          +   'placeholder="Primary / Backup" style="width:120px"></td>'
           + '<td><span class="pill '+esc(m.status)+'">'+esc(m.status)+'</span></td>'
           + '<td class="row">'
           +   (m.status === "pending"
@@ -372,6 +392,7 @@
 
       html += '</tbody></table></div></div>';
       el.innerHTML = html;
+      wireMemberImport();
     }).catch(function(e){
       el.innerHTML = '<div class="card"><div class="err">'+esc(e.message||"Could not load members")+'</div></div>';
     });
@@ -1018,6 +1039,425 @@
     }
   }
 
+  /* ================= IMAGES =================
+     Apartment maps, cabinet photos and tile icons. Drop in a whole folder
+     at once. Files go to this organization's own storage, so one chapter's
+     maps are never visible to another. */
+
+  var MEDIA_KINDS = [
+    { key:"apartments", label:"Apartment maps",
+      hint:"One image per complex. The file name becomes the complex name unless it already exists." },
+    { key:"cabinets", label:"Cabinet photos",
+      hint:"The photos behind the equipment finder." },
+    { key:"tile-icons", label:"Home screen icons",
+      hint:"Matched to tiles by file name." },
+    { key:"media", label:"Anything else", hint:"" }
+  ];
+
+  var MEDIA_QUEUE = null;
+
+  function renderMedia(){
+    var el = $("tab-media");
+    el.innerHTML =
+      '<div class="card"><h2>Upload images</h2>'
+      + '<p class="hint">Pick a whole folder or select many files at once. Nothing is '
+      + 'overwritten unless the file name matches something already there.</p>'
+      + '<div class="grid2">'
+      +   '<div class="f"><label>What are these?</label><select id="md_kind">'
+      +     MEDIA_KINDS.map(function(k){
+              return '<option value="'+k.key+'">'+esc(k.label)+'</option>'; }).join("")
+      +   '</select></div>'
+      +   '<div class="f"><label>Files</label>'
+      +     '<input id="md_files" type="file" multiple accept="image/*"></div>'
+      + '</div>'
+      + '<p class="hint" id="md_hint">'+esc(MEDIA_KINDS[0].hint)+'</p>'
+      + '<button id="md_go" class="btn primary hidden">Upload</button>'
+      + '<div id="md_progress" class="hidden" style="margin-top:14px">'
+      +   '<div class="bar-outer"><div id="md_bar" class="bar-inner"></div></div>'
+      +   '<div id="md_status" class="mono">\u2014</div>'
+      + '</div>'
+      + '<div id="md_out" style="margin-top:12px"></div></div>'
+
+      + '<div class="card"><h2>Already uploaded</h2><div id="md_list">'
+      + '<div class="empty">Loading\u2026</div></div></div>';
+
+    wireMedia();
+    listMedia();
+  }
+
+  function wireMedia(){
+    var kind = $("md_kind"), files = $("md_files");
+    if(!kind) return;
+    kind.addEventListener("change", function(){
+      for(var i=0;i<MEDIA_KINDS.length;i++){
+        if(MEDIA_KINDS[i].key === kind.value) $("md_hint").textContent = MEDIA_KINDS[i].hint;
+      }
+      listMedia();
+    });
+    files.addEventListener("change", function(e){
+      MEDIA_QUEUE = Array.prototype.slice.call(e.target.files || []);
+      var go = $("md_go");
+      if(!MEDIA_QUEUE.length){ go.classList.add("hidden"); return; }
+      var mb = MEDIA_QUEUE.reduce(function(a,f){ return a + f.size; }, 0) / 1048576;
+      $("md_out").innerHTML = '<div class="warn">'+MEDIA_QUEUE.length
+        + ' files, ' + mb.toFixed(1) + ' MB in total.</div>';
+      go.classList.remove("hidden");
+      go.textContent = "Upload " + MEDIA_QUEUE.length + " images";
+    });
+  }
+
+  function mediaPath(kind, name){
+    var clean = String(name).toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+    return orgId + "/" + kind + "/" + clean;
+  }
+
+  function uploadMedia(){
+    if(!MEDIA_QUEUE || !MEDIA_QUEUE.length) return;
+    var kind = $("md_kind").value;
+    var go = $("md_go"); go.disabled = true;
+    $("md_progress").classList.remove("hidden");
+
+    var done = 0, failed = [], total = MEDIA_QUEUE.length;
+
+    function step(i){
+      if(i >= total){
+        go.disabled = false;
+        $("md_status").textContent = failed.length
+          ? (done + " uploaded, " + failed.length + " failed")
+          : (done + " uploaded");
+        $("md_out").innerHTML = failed.length
+          ? '<div class="err">These did not upload:<br>' + failed.map(esc).join("<br>") + '</div>'
+          : '<div class="warn">All ' + done + ' uploaded.</div>';
+        MEDIA_QUEUE = null;
+        $("md_files").value = "";
+        if(kind === "apartments") linkApartments();
+        else if(kind === "tile-icons") linkTileIcons();
+        listMedia();
+        return;
+      }
+      var f = MEDIA_QUEUE[i];
+      $("md_bar").style.width = Math.round(i/total*100) + "%";
+      $("md_status").textContent = (i+1) + " of " + total + " \u00B7 " + f.name;
+
+      db.storage.from("org-branding")
+        .upload(mediaPath(kind, f.name), f, { upsert:true, contentType:f.type || "image/jpeg" })
+        .then(function(r){
+          if(r.error) failed.push(f.name + " (" + r.error.message + ")"); else done++;
+          step(i+1);
+        })
+        .catch(function(){ failed.push(f.name); step(i+1); });
+    }
+    step(0);
+  }
+
+  function publicUrl(path){
+    var r = db.storage.from("org-branding").getPublicUrl(path);
+    return (r && r.data && r.data.publicUrl) || "";
+  }
+
+  /* a map with no complex behind it is invisible, so make one */
+  function linkApartments(){
+    db.storage.from("org-branding").list(orgId + "/apartments", { limit: 500 })
+      .then(function(r){
+        var files = (r.data || []).filter(function(f){ return f.name; });
+        if(!files.length) return;
+        return db.from("complexes").select("id,name,map_path").eq("org_id", orgId)
+          .then(function(ex){
+            var have = {};
+            (ex.data || []).forEach(function(c){
+              have[String(c.map_path||"").split("/").pop()] = c;
+            });
+            var add = [];
+            files.forEach(function(f){
+              if(have[f.name]) return;
+              var stem = f.name.replace(/\.[a-z0-9]+$/i, "");
+              add.push({
+                org_id: orgId,
+                name: stem.replace(/[-_]+/g, " ").replace(/\b\w/g, function(c){ return c.toUpperCase(); }),
+                map_path: publicUrl(orgId + "/apartments/" + f.name),
+                is_active: true, sort_order: 500
+              });
+            });
+            if(!add.length) return;
+            return db.from("complexes").insert(add).then(function(){
+              toast("Created " + add.length + " apartment complexes");
+            });
+          });
+      }).catch(function(){});
+  }
+
+  /* match uploaded icons to tiles by file name */
+  function linkTileIcons(){
+    db.storage.from("org-branding").list(orgId + "/tile-icons", { limit: 200 })
+      .then(function(r){
+        var files = (r.data || []).filter(function(f){ return f.name; });
+        if(!files.length) return;
+        return db.from("tiles").select("id,label,image_path").eq("org_id", orgId)
+          .then(function(t){
+            var jobs = [];
+            (t.data || []).forEach(function(tile){
+              var want = String(tile.image_path || "").split("/").pop().toLowerCase()
+                           .replace(/[^a-z0-9._-]+/g, "-");
+              if(!want) return;
+              for(var i=0;i<files.length;i++){
+                if(files[i].name.toLowerCase() === want){
+                  jobs.push(db.from("tiles")
+                    .update({ image_path: publicUrl(orgId + "/tile-icons/" + files[i].name) })
+                    .eq("id", tile.id));
+                  break;
+                }
+              }
+            });
+            if(jobs.length) return Promise.all(jobs).then(function(){
+              toast("Linked " + jobs.length + " tile icons");
+            });
+          });
+      }).catch(function(){});
+  }
+
+  function listMedia(){
+    var kind = $("md_kind") ? $("md_kind").value : "apartments";
+    var box = $("md_list");
+    if(!box) return;
+    box.innerHTML = '<div class="empty">Loading\u2026</div>';
+    db.storage.from("org-branding").list(orgId + "/" + kind, { limit: 500 })
+      .then(function(r){
+        var files = (r.data || []).filter(function(f){ return f.name; });
+        if(!files.length){
+          box.innerHTML = '<div class="empty">Nothing uploaded here yet.</div>';
+          return;
+        }
+        box.innerHTML = '<p class="hint">'+files.length+' files.</p>'
+          + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:9px">'
+          + files.slice(0, 120).map(function(f){
+              var u = publicUrl(orgId + "/" + kind + "/" + f.name);
+              return '<div style="border:1px solid var(--line);border-radius:9px;overflow:hidden;'
+                + 'background:#fff"><img src="'+esc(u)+'" alt="" style="width:100%;height:80px;'
+                + 'object-fit:cover;display:block"><div class="small" style="padding:5px 7px;'
+                + 'word-break:break-all">'+esc(f.name)+'</div></div>';
+            }).join("")
+          + '</div>'
+          + (files.length > 120 ? '<p class="hint">Showing the first 120.</p>' : '');
+      }).catch(function(e){
+        box.innerHTML = '<div class="err">'+esc(e.message||"Could not list files")+'</div>';
+      });
+  }
+
+  /* ---------- importing a roster ---------- */
+  function wireMemberImport(){
+    var f = $("mi_file");
+    if(!f) return;
+    f.addEventListener("change", function(e){
+      var file = e.target.files && e.target.files[0];
+      if(!file) return;
+      var out = $("mi_out");
+      out.innerHTML = '<div class="empty">Reading\u2026</div>';
+      var fr = new FileReader();
+      fr.onload = function(ev){
+        try{
+          var wb = XLSX.read(ev.target.result, { type:"array" });
+          var grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],
+                       { header:1, blankrows:false, defval:"" });
+          var head = grid[0].map(function(h){ return String(h||"").trim().toLowerCase(); });
+          function col(){
+            for(var i=0;i<arguments.length;i++){
+              var k = head.indexOf(arguments[i]);
+              if(k > -1) return k;
+            }
+            return -1;
+          }
+          var cF = col("first name","first"), cL = col("last name","last"),
+              cU = col("unit","unit #"), cA = col("admin"),
+              cD = col("dispatcher"), cAc = col("active"), cS = col("status");
+          if(cU < 0){ throw new Error("No column named Unit was found."); }
+
+          var yes = function(v){
+            return ["x","yes","true","1"].indexOf(String(v||"").trim().toLowerCase()) > -1;
+          };
+          var rows = [];
+          grid.slice(1).forEach(function(r){
+            var unit = String(r[cU]||"").trim();
+            if(!unit) return;
+            var nm = ((cF>-1?String(r[cF]||"").trim():"") + " " +
+                      (cL>-1?String(r[cL]||"").trim():"")).trim();
+            rows.push({
+              unit_number: unit,
+              display_name: nm || null,
+              role: (cA>-1 && yes(r[cA])) ? "admin" : "member",
+              is_dispatcher: cD>-1 ? yes(r[cD]) : false,
+              status: (cAc<0 || yes(r[cAc])) ? "active" : "suspended",
+              duty_status: cS>-1 ? (String(r[cS]||"").trim() || null) : null
+            });
+          });
+          if(!rows.length) throw new Error("No rows with a unit number.");
+
+          var admins = rows.filter(function(x){ return x.role === "admin"; }).length;
+          var disps  = rows.filter(function(x){ return x.is_dispatcher; }).length;
+          out.innerHTML = '<div class="warn"><b>'+rows.length+' people.</b><br>'
+            + admins+' administrators, '+disps+' dispatchers.</div>'
+            + '<div class="scroller"><table><thead><tr><th>Unit</th><th>Name</th><th>Role</th>'
+            + '<th>Dispatcher</th><th>Duty</th></tr></thead><tbody>'
+            + rows.slice(0,6).map(function(x){
+                return '<tr><td>'+esc(x.unit_number)+'</td><td>'+esc(x.display_name||"\u2014")
+                  + '</td><td>'+x.role+'</td><td>'+(x.is_dispatcher?"yes":"\u2014")
+                  + '</td><td>'+esc(x.duty_status||"\u2014")+'</td></tr>'; }).join("")
+            + '</tbody></table></div>'
+            + (rows.length>6 ? '<p class="hint">First 6 of '+rows.length+'.</p>' : '')
+            + '<button id="mi_go" class="btn primary" style="margin-top:12px">'
+            + 'Import '+rows.length+' people</button>';
+          MEMBER_ROWS = rows;
+        }catch(err){
+          out.innerHTML = '<div class="err">'+esc(err.message||"Could not read that file.")+'</div>';
+        }
+      };
+      fr.readAsArrayBuffer(file);
+    });
+  }
+
+  var MEMBER_ROWS = null;
+
+  /* A roster row is not a login. It reserves the unit number, the role and
+     the dispatcher flag; the person is attached the first time they sign in
+     with their own email. */
+  function importMembers(){
+    if(!MEMBER_ROWS) return;
+    var b = $("mi_go"); b.disabled = true; b.textContent = "Importing\u2026";
+    db.from("roster_slots").upsert(
+      MEMBER_ROWS.map(function(r){
+        return { org_id: orgId, unit_number: r.unit_number, display_name: r.display_name,
+                 role: r.role, is_dispatcher: r.is_dispatcher,
+                 duty_status: r.duty_status, status: r.status };
+      }), { onConflict: "org_id,unit_number" }
+    ).then(function(r){
+      b.disabled = false; b.textContent = "Import";
+      if(r.error) return oops(r.error);
+      toast("Imported " + MEMBER_ROWS.length + " people");
+      MEMBER_ROWS = null;
+      renderMembers();
+    }).catch(function(e){ b.disabled = false; b.textContent = "Import"; oops(e); });
+  }
+
+  /* ================= HOME SCREEN TILES =================
+     Every organization runs different outside services - one uses ESO for
+     its records, another uses a different system entirely. So the tiles
+     are theirs to set, not something baked into the app. */
+
+  var TILE_KINDS = [
+    ["hospitals","Hospitals"],
+    ["protocols","Protocols"],
+    ["apartments","Apartments"],
+    ["directory","Member directory"],
+    ["certifications","Certifications"],
+    ["placement","Equipment finder"],
+    ["equipment","Equipment checklist"],
+    ["erg","ERG guidebook"],
+    ["board","Scheduler / dispatch board"],
+    ["upload","File uploader"],
+    ["link","Outside website or phone number"],
+    ["app","Another app on the phone"]
+  ];
+
+  function kindLabel(k){
+    for(var i=0;i<TILE_KINDS.length;i++){ if(TILE_KINDS[i][0] === k) return TILE_KINDS[i][1]; }
+    return k;
+  }
+
+  function renderTiles(){
+    var el = $("tab-tiles");
+    el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
+
+    db.from("tiles").select("*").eq("org_id", orgId).order("sort_order")
+      .then(function(r){
+        if(r.error) throw r.error;
+        var rows = r.data || [];
+
+        var html = '<div class="card"><h2>Add a tile</h2>'
+          + '<p class="hint">Built-in screens need nothing but a name. For an outside website, '
+          + 'a phone number or another app, put the address in Target.</p>'
+          + '<div class="grid2">'
+          +   '<div class="f"><label>Name on the tile</label><input id="nt_label"></div>'
+          +   '<div class="f"><label>What it opens</label><select id="nt_kind">'
+          +     TILE_KINDS.map(function(k){
+                  return '<option value="'+k[0]+'">'+esc(k[1])+'</option>'; }).join("")
+          +   '</select></div>'
+          +   '<div class="f" style="grid-column:1/-1"><label>Target '
+          +     '(only for an outside link, phone number or app)</label>'
+          +     '<input id="nt_target" placeholder="https://\u2026  or  tel:18002221222"></div>'
+          + '</div>'
+          + '<label class="row" style="margin-bottom:12px"><input type="checkbox" id="nt_admin" '
+          +   'style="width:auto"> <span>Administrators only</span></label>'
+          + '<button id="nt_add" class="btn primary">Add tile</button></div>';
+
+        html += '<div class="card"><h2>Home screen order</h2>'
+          + '<p class="hint">Members see these top to bottom. Change a number and it moves. '
+          + 'Switch one off and it disappears from every member\u2019s phone.</p>';
+
+        if(!rows.length){
+          html += '<div class="empty">No tiles yet.</div></div>';
+          el.innerHTML = html; wireTiles(); return;
+        }
+
+        html += '<div class="scroller"><table><thead><tr>'
+          + '<th style="width:70px">Order</th><th>Name</th><th>Opens</th><th>Target</th>'
+          + '<th>Admin only</th><th>On</th><th></th></tr></thead><tbody>';
+
+        rows.forEach(function(t){
+          var needsTarget = (t.kind === "link" || t.kind === "app");
+          html += '<tr>'
+            + '<td><input class="js-t" data-id="'+t.id+'" data-f="sort_order" '
+            +   'value="'+esc(t.sort_order)+'" inputmode="decimal" style="width:60px"></td>'
+            + '<td><input class="js-t" data-id="'+t.id+'" data-f="label" value="'+esc(t.label)+'"></td>'
+            + '<td><select class="js-tsel" data-id="'+t.id+'" data-f="kind">'
+            +   TILE_KINDS.map(function(k){
+                  return '<option value="'+k[0]+'"'+(t.kind===k[0]?" selected":"")+'>'
+                    + esc(k[1])+'</option>'; }).join("")
+            + '</select></td>'
+            + '<td><input class="js-t" data-id="'+t.id+'" data-f="target" '
+            +   'value="'+esc(t.target||"")+'" placeholder="'+(needsTarget?"required":"\u2014")+'"></td>'
+            + '<td style="text-align:center"><input type="checkbox" class="js-tchk" '
+            +   'data-id="'+t.id+'" data-f="min_role" '+(t.min_role==="admin"?"checked":"")+'></td>'
+            + '<td style="text-align:center"><input type="checkbox" class="js-tchk" '
+            +   'data-id="'+t.id+'" data-f="is_active" '+(t.is_active?"checked":"")+'></td>'
+            + '<td class="actions"><button class="xbtn js-tdel" data-id="'+t.id+'" '
+            +   'data-name="'+esc(t.label)+'" title="Delete">\u00D7</button></td>'
+            + '</tr>';
+        });
+        html += '</tbody></table></div>'
+          + '<p class="hint" style="margin-top:12px">Changes save as you make them.</p></div>';
+        el.innerHTML = html;
+        wireTiles();
+      }).catch(function(e){
+        el.innerHTML = '<div class="card"><div class="err">'
+          + esc(e.message||"Could not load tiles") + '</div></div>';
+      });
+  }
+
+  function wireTiles(){
+    var add = $("nt_add");
+    if(!add) return;
+    add.addEventListener("click", function(){
+      var label = $("nt_label").value.trim();
+      var kind  = $("nt_kind").value;
+      var target = $("nt_target").value.trim();
+      if(!label){ toast("Give the tile a name."); return; }
+      if((kind === "link" || kind === "app") && !target){
+        toast("An outside link or app needs a target."); return;
+      }
+      add.disabled = true;
+      db.from("tiles").insert({
+        org_id: orgId, label: label, kind: kind,
+        target: target || null,
+        min_role: $("nt_admin").checked ? "admin" : "member",
+        sort_order: 999, is_active: true
+      }).then(function(r){
+        add.disabled = false;
+        if(r.error) return oops(r.error);
+        toast("Added " + label);
+        renderTiles();
+      }).catch(function(e){ add.disabled = false; oops(e); });
+    });
+  }
+
   /* ---------- the contents list ----------
      A protocol book is useless as a flat run of pages. Members look things
      up by name. If the PDF has bookmarks we take them automatically; when
@@ -1274,6 +1714,14 @@
         .then(function(r){ if(r.error) return oops(r.error); toast("Suspended"); renderMembers(); });
       return;
     }
+    var td = t.closest(".js-tdel");
+    if(td){
+      if(!confirm("Remove the " + td.getAttribute("data-name") + " tile?")) return;
+      db.from("tiles").delete().eq("id", td.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error); toast("Removed"); renderTiles(); });
+      return;
+    }
+
     var hd = t.closest(".js-hdel");
     if(hd){
       if(!confirm("Delete " + hd.getAttribute("data-name") + "? This cannot be undone.")) return;
@@ -1295,6 +1743,8 @@
     }
     var tc = t.closest(".js-toc");
     if(tc){ openToc(tc.getAttribute("data-id"), tc.getAttribute("data-name")); return; }
+    if(t.id === "mi_go"){ importMembers(); return; }
+    if(t.id === "md_go"){ uploadMedia(); return; }
     if(t.id === "toc_check"){ checkToc(); return; }
     if(t.id === "toc_save"){ saveToc(); return; }
     if(t.id === "toc_back"){ renderProtocols(); return; }
@@ -1339,9 +1789,48 @@
     }
   });
 
+  /* tile edits */
+  document.addEventListener("change", function(e){
+    var el = e.target;
+    if(el.classList && el.classList.contains("js-tsel")){
+      db.from("tiles").update({ kind: el.value }).eq("id", el.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error); toast("Saved"); renderTiles(); });
+      return;
+    }
+    if(el.classList && el.classList.contains("js-disp")){
+      db.from("memberships").update({ is_dispatcher: el.checked })
+        .eq("id", el.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error);
+                           toast(el.checked ? "Now a dispatcher" : "No longer a dispatcher"); });
+      return;
+    }
+    if(el.classList && el.classList.contains("js-tchk")){
+      var f = el.getAttribute("data-f");
+      var patch = {};
+      patch[f] = (f === "min_role") ? (el.checked ? "admin" : "member") : el.checked;
+      db.from("tiles").update(patch).eq("id", el.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error); toast("Saved"); });
+      return;
+    }
+  });
+
   /* inline edits save on blur */
   document.addEventListener("blur", function(e){
     var i = e.target;
+    if(i.classList && i.classList.contains("js-duty")){
+      db.from("memberships").update({ duty_status: i.value.trim() || null })
+        .eq("id", i.getAttribute("data-id"))
+        .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
+      return;
+    }
+    if(i.classList && i.classList.contains("js-t")){
+      var tf = i.getAttribute("data-f"), tv = i.value.trim();
+      var tp = {};
+      tp[tf] = (tf === "sort_order") ? (parseFloat(tv) || 999) : (tv || null);
+      db.from("tiles").update(tp).eq("id", i.getAttribute("data-id"))
+        .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
+      return;
+    }
     if(!i.classList || !i.classList.contains("js-h")) return;
     var f = i.getAttribute("data-f"), v = i.value.trim();
     var patch = {};
