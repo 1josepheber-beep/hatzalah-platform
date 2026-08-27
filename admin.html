@@ -84,12 +84,29 @@
   .pill.suspended{background:#FDECEC;color:var(--red)}
   .pill.admin{background:#EAF0F9;color:#28456F}
   .small{font-size:13px;color:var(--muted)}
+  /* a count sitting inside a selected button has to be legible on it */
+  .btn.primary .small,
+  .btn.primary .small *{color:rgba(255,255,255,.85)}
+  .btn .small{margin-left:5px;font-weight:600}
   .warn{background:#FFF8E6;border:1px solid #E8CE86;color:#6B520C;
     padding:10px 12px;border-radius:9px;font-size:13.5px;margin-bottom:13px}
   .empty{text-align:center;color:var(--muted);padding:30px}
   .badgepick{display:flex;flex-wrap:wrap;gap:4px}
+  /* Scrolling right must not lose the name of the person you are reading.
+     The first column and the header row both stay put. */
+  .certgrid{border-collapse:separate;border-spacing:0}
+  .certgrid thead th{position:sticky;top:0;z-index:3;background:#fff;
+    box-shadow:inset 0 -2px 0 var(--line)}
+  .certgrid tbody td:first-child,
+  .certgrid thead th:first-child{position:sticky;left:0;z-index:2;background:#fff;
+    box-shadow:inset -1px 0 0 var(--line)}
+  .certgrid thead th:first-child{z-index:4}
+  .certgrid tbody tr:hover td:first-child{background:#F7F9FC}
   .certgrid td.cell{text-align:center;font-size:12.5px;cursor:pointer;white-space:nowrap;
     font-variant-numeric:tabular-nums}
+  .scroller.tall{max-height:70vh;overflow:auto}
+  .reqtag{display:block;font-size:10px;font-weight:700;letter-spacing:.04em;
+    color:#93151C;margin-top:2px}
   .certgrid td.cell:hover{outline:2px solid var(--brand);outline-offset:-2px}
   .cell.ok{background:#EAF4EC;color:#146030}
   .cell.soon{background:#FFF3D4;color:#8A6A1A;font-weight:650}
@@ -1565,7 +1582,7 @@
      the point - somebody who has submitted nothing is the person you most
      need to see. */
 
-  var CERT_FILTER = "all", CERT_SEARCH = "";
+  var CERT_FILTER = "all", CERT_SEARCH = "", CERT_WHO = "member";
 
   function certState(exp, warnDays){
     if(!exp) return { k:"missing", label:"\u2014" };
@@ -1629,7 +1646,8 @@
 
       // counts for the filters
       var counts = { all:0, expired:0, soon:0, missing:0, pending:0 };
-      roster.forEach(function(p){
+      roster.filter(function(p){ return CERT_WHO === "all" || p.role === CERT_WHO; })
+        .forEach(function(p){
         types.forEach(function(t){
           var h = held[(p.unit_number||"").toLowerCase() + "|" + t.id];
           counts.all++;
@@ -1641,7 +1659,11 @@
         });
       });
 
+      var whoCounts = { all: roster.length, member:0, dispatcher:0, admin:0 };
+      roster.forEach(function(p){ whoCounts[p.role] = (whoCounts[p.role]||0) + 1; });
+
       var shown = roster.filter(function(p){
+        if(CERT_WHO !== "all" && p.role !== CERT_WHO) return false;
         if(CERT_SEARCH){
           var hay = ((p.display_name||"") + " " + (p.unit_number||"")).toLowerCase();
           if(hay.indexOf(CERT_SEARCH.toLowerCase()) < 0) return false;
@@ -1658,7 +1680,19 @@
 
       var html = '<div class="card" style="padding:14px 16px">'
         + '<div class="row" style="margin-bottom:10px">'
-        + [["all","Everyone",roster.length],["expired","Expired",counts.expired],
+        +   '<span class="small" style="min-width:52px">Who</span>'
+        +   [["member","Responders",whoCounts.member],
+             ["dispatcher","Dispatchers",whoCounts.dispatcher],
+             ["admin","Administrators",whoCounts.admin],
+             ["all","Everyone",whoCounts.all]].map(function(w){
+              return '<button class="btn js-cwho'+(CERT_WHO===w[0]?" primary":"")+'" '
+                + 'data-w="'+w[0]+'"'+(w[2]?"":" disabled")+'>'
+                + esc(w[1]) + ' <span class="small">'+w[2]+'</span></button>';
+            }).join("")
+        + '</div>'
+        + '<div class="row" style="margin-bottom:10px">'
+        +   '<span class="small" style="min-width:52px">Show</span>'
+        + [["all","All of them",counts.all],["expired","Expired",counts.expired],
            ["soon","Expiring soon",counts.soon],["missing","Missing",counts.missing],
            ["pending","Awaiting review",counts.pending]].map(function(f){
             return '<button class="btn js-cfilter'+(CERT_FILTER===f[0]?" primary":"")+'" '
@@ -1696,7 +1730,7 @@
         + '<th style="min-width:150px">Member</th>'
         + types.map(function(t){
             return '<th style="min-width:104px">'+esc(t.name)
-              + (t.is_required ? ' <span class="small">required</span>' : '') + '</th>';
+              + (t.is_required ? '<span class="reqtag">REQUIRED</span>' : '') + '</th>';
           }).join("")
         + '</tr></thead><tbody>';
 
@@ -1734,6 +1768,11 @@
   }
 
   function wireCerts(){
+    Array.prototype.forEach.call(document.querySelectorAll(".js-cwho"), function(b){
+      b.addEventListener("click", function(){
+        CERT_WHO = b.getAttribute("data-w"); renderCerts();
+      });
+    });
     Array.prototype.forEach.call(document.querySelectorAll(".js-cfilter"), function(b){
       b.addEventListener("click", function(){
         CERT_FILTER = b.getAttribute("data-f"); renderCerts();
