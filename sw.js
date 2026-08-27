@@ -1,5 +1,5 @@
 /* Hatzalah of Houston - service worker */
-var CACHE="hz-v1";
+var CACHE="hz-v2";
 var SHELL=["./","./index.html","./placement.js","./manifest.webmanifest","./icon-192.png","./icon-512.png","./ruleof9.webp"];
 self.addEventListener("install",function(e){
   self.skipWaiting();
@@ -15,7 +15,24 @@ self.addEventListener("fetch",function(e){
   if(req.method!=="GET") return;
   var url=new URL(req.url);
 
-  // Supabase: network-first, fall back to the last cached copy when offline
+  // Images stored for an organization - protocol pages, apartment maps,
+  // cabinet photos. These never change once uploaded, so keep the first copy
+  // and serve it instantly afterwards. This is what makes the protocol book
+  // readable in a stairwell with no signal.
+  if(url.hostname.indexOf("supabase.co")>-1 && url.pathname.indexOf("/storage/")>-1){
+    e.respondWith(
+      caches.match(req).then(function(hit){
+        if(hit && hit.ok) return hit;
+        return fetch(req).then(function(res){
+          if(res && res.ok){ var copy=res.clone(); caches.open(CACHE).then(function(c){c.put(req,copy);}); }
+          return res;
+        }).catch(function(){ return hit; })
+      })
+    );
+    return;
+  }
+
+  // Supabase data: network-first, fall back to the last cached copy when offline
   if(url.hostname.indexOf("supabase.co")>-1){
     e.respondWith(
       fetch(req).then(function(res){

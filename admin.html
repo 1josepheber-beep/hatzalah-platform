@@ -1374,7 +1374,7 @@
                 if(!blob) return reject(new Error("Could not turn page " + n + " into an image."));
                 var path = orgId + "/protocols/" + setId + "/p"
                          + String(n).padStart(4,"0") + ".jpg";
-                db.storage.from("org-media").upload(path, blob, {
+                db.storage.from("org-branding").upload(path, blob, {
                   contentType:"image/jpeg", upsert:true
                 }).then(function(up){
                   if(up.error) return reject(new Error("Upload blocked on page " + n + ": " + up.error.message));
