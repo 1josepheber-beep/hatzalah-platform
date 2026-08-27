@@ -121,7 +121,10 @@
   .cellkey.pending{background:#EAF0F9;color:#28456F}
   .scrim{position:fixed;inset:0;background:rgba(10,16,26,.5);z-index:60;
     display:flex;align-items:center;justify-content:center;padding:20px}
-  .sheet{background:#fff;border-radius:14px;padding:20px;max-width:520px;width:100%}
+  .sheet{background:#fff;border-radius:14px;padding:20px;max-width:520px;width:100%;
+    max-height:88vh;overflow:auto}
+  .sheet.wide{max-width:820px}
+  tr.js-person:hover td{background:#F7F9FC}
   .bchip{font-size:11px;font-weight:650;padding:4px 8px;border-radius:999px;
     border:1px solid var(--line);background:#fff;color:var(--muted);cursor:pointer}
   .bchip.on{background:var(--brand);border-color:var(--brand);color:#fff}
@@ -360,193 +363,123 @@
   }
 
   /* ================= MEMBERS =================
-     This shows the ROSTER - everyone in the organization, whether or not
-     they have ever opened the app. A person appears here the moment you
-     import them, and gains a tick once they sign in for the first time.
-     Anyone who signs in without a place on the roster is listed
-     underneath, waiting to be given a unit. */
+     One record per person. Everything about them is edited in one place:
+     who they are, how to reach them, what they may do, the hats they wear,
+     and their certifications. */
+
+  var PEOPLE = [], BADGE_TYPES = [], CERT_TYPES = [];
+
+  function personName(p){
+    return ((p.first_name || "") + " " + (p.last_name || "")).trim() || "(no name)";
+  }
 
   function renderMembers(){
     var el = $("tab-members");
     el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
 
     Promise.all([
-      db.from("roster_slots").select("*").eq("org_id", orgId).order("unit_number"),
-      db.from("badge_types").select("name,color,sort_order").eq("org_id", orgId)
-        .eq("is_active", true).order("sort_order"),
-      db.from("memberships")
-        .select("id,user_id,role,status,unit_number,display_name,duty_status,badges")
-        .eq("org_id", orgId),
-      db.from("profiles").select("id,full_name,email")
+      db.from("people").select("*").eq("org_id", orgId).order("sort_order"),
+      db.from("badge_types").select("name,color,sort_order")
+        .eq("org_id", orgId).eq("is_active", true).order("sort_order"),
+      db.from("memberships").select("user_id,status").eq("org_id", orgId)
     ]).then(function(r){
       if(r[0].error) throw r[0].error;
-      var roster = r[0].data || [], badgeTypes = r[1].data || [],
-          mems = r[2].data || [], people = {};
-      (r[3].data || []).forEach(function(p){ people[p.id] = p; });
+      PEOPLE = r[0].data || [];
+      BADGE_TYPES = r[1].data || [];
+      var signedIn = {};
+      (r[2].data || []).forEach(function(m){ signedIn[m.user_id] = m.status; });
 
-      var byUnit = {};
-      mems.forEach(function(m){
-        if(m.unit_number) byUnit[String(m.unit_number).toLowerCase()] = m;
+      var counts = { all: PEOPLE.length };
+      PEOPLE.forEach(function(p){ counts[p.role] = (counts[p.role] || 0) + 1; });
+      BADGE_TYPES.forEach(function(b){
+        counts["badge:" + b.name] = PEOPLE.filter(function(p){
+          return (p.badges || []).indexOf(b.name) > -1; }).length;
       });
-      var unplaced = mems.filter(function(m){ return !m.unit_number; });
+      counts.nounit = PEOPLE.filter(function(p){ return !p.unit_number; }).length;
 
-      var signedIn = roster.filter(function(s){
-        return byUnit[String(s.unit_number).toLowerCase()];
-      }).length;
-      var freeSlots = roster.filter(function(s){
-        return !byUnit[String(s.unit_number).toLowerCase()];
-      });
-
-      var html = "";
-
-      if(unplaced.length){
-        html += '<div class="warn"><b>'+unplaced.length+' waiting to be given a unit.</b> '
-             +  'They signed in but were not on the roster. See the bottom of this page.</div>';
-      }
-
-      var counts = { all: roster.length };
-      roster.forEach(function(x){ counts[x.role] = (counts[x.role]||0) + 1; });
-      badgeTypes.forEach(function(b){
-        counts["badge:"+b.name] = roster.filter(function(x){
-          return (x.badges||[]).indexOf(b.name) > -1; }).length;
-      });
-
-      /* Two different questions, so two rows. What someone is ALLOWED to do
-         is not the same as the hats they wear, and putting both in one row
-         made "Dispatchers" and "Dispatcher" sit side by side looking like a
-         mistake. */
-      function filterRow(list){
+      function row(list){
         return list.map(function(f){
-            var n = counts[f[0]] || 0;
-            return '<button class="btn js-rfilter'+(ROSTER_FILTER===f[0]?" primary":"")+'" '
-              + 'data-f="'+esc(f[0])+'"'+(n?"":" disabled")+'>'
-              + esc(f[1]) + ' <span class="small">'+n+'</span></button>';
-          }).join("");
+          var n = counts[f[0]] || 0;
+          return '<button class="btn js-rfilter'+(ROSTER_FILTER===f[0]?" primary":"")+'" '
+            + 'data-f="'+esc(f[0])+'"'+(n?"":" disabled")+'>'
+            + esc(f[1]) + ' <span class="small">'+n+'</span></button>';
+        }).join("");
       }
 
-      html += '<div class="card" style="padding:14px 16px">'
+      var html = '<div class="card" style="padding:14px 16px">'
         + '<div class="row" style="margin-bottom:10px">'
-        +   '<span class="small" style="min-width:74px">Can do</span>'
-        +   filterRow([["all","Everyone"],["admin","Administrators"],
-                       ["dispatcher","Dispatchers"],["member","Responders"],["guest","Guests"]])
+        +   '<span class="small" style="min-width:60px">Can do</span>'
+        +   row([["all","Everyone"],["admin","Administrators"],["dispatcher","Dispatchers"],
+                 ["member","Responders"],["guest","Guests"],["nounit","No unit"]])
         + '</div>'
-        + (badgeTypes.length
+        + (BADGE_TYPES.length
             ? '<div class="row" style="margin-bottom:10px">'
-              + '<span class="small" style="min-width:74px">Badge</span>'
-              + filterRow(badgeTypes.map(function(b){ return ["badge:"+b.name, b.name]; }))
-              + '</div>'
-            : '')
+              + '<span class="small" style="min-width:60px">Badge</span>'
+              + row(BADGE_TYPES.map(function(b){ return ["badge:"+b.name, b.name]; }))
+              + '</div>' : '')
         + '<div class="row">'
-        +   '<span class="small" style="min-width:74px">Find</span>'
-        +   '<input id="rsearch" placeholder="Name, unit or email" value="'+esc(ROSTER_SEARCH)+'" '
-        +   'style="flex:1;min-width:170px;padding:9px 11px;border-radius:9px;border:1px solid var(--line)">'
+        +   '<span class="small" style="min-width:60px">Find</span>'
+        +   '<input id="rsearch" placeholder="Name, unit, email or phone" '
+        +   'value="'+esc(ROSTER_SEARCH)+'" style="flex:1;min-width:180px;padding:9px 11px;'
+        +   'border-radius:9px;border:1px solid var(--line)">'
+        +   '<button id="pp_new" class="btn primary">Add a person</button>'
         + '</div></div>';
 
-      var shown = roster.filter(function(x){
-        if(ROSTER_FILTER !== "all"){
+      var shown = PEOPLE.filter(function(p){
+        if(ROSTER_FILTER === "nounit"){ if(p.unit_number) return false; }
+        else if(ROSTER_FILTER !== "all"){
           if(ROSTER_FILTER.indexOf("badge:") === 0){
-            if((x.badges||[]).indexOf(ROSTER_FILTER.slice(6)) < 0) return false;
-          } else if(x.role !== ROSTER_FILTER) return false;
+            if((p.badges||[]).indexOf(ROSTER_FILTER.slice(6)) < 0) return false;
+          } else if(p.role !== ROSTER_FILTER) return false;
         }
         if(ROSTER_SEARCH){
-          var hay = ((x.display_name||"")+" "+(x.unit_number||"")+" "+(x.email||"")).toLowerCase();
+          var hay = (personName(p) + " " + (p.unit_number||"") + " " + (p.email||"")
+                     + " " + (p.phone||"")).toLowerCase();
           if(hay.indexOf(ROSTER_SEARCH.toLowerCase()) < 0) return false;
         }
         return true;
       });
 
-      html += '<div class="card"><h2>Roster</h2>'
-        + '<p class="hint">'+roster.length+' people. '+signedIn+' have signed in at least once. '
-        + 'Everyone else is set up and waiting for their first sign-in.</p>'
-        + '<p class="hint">The <b>email</b> matters: when someone signs in with the address on '
-        + 'their row, they go straight into that unit with these settings. Get it wrong and they '
-        + 'land in the waiting list instead.</p>';
+      html += '<div class="card"><h2>People</h2>'
+        + '<p class="hint">Showing '+shown.length+' of '+PEOPLE.length+'. '
+        + 'Click anyone to open their record \u2014 details, what they may do, '
+        + 'and their certifications, all in one place.</p>';
 
       if(!shown.length){
         html += '<div class="empty">'
-          + (roster.length ? "Nobody matches that filter."
-                           : "No roster yet. Import your Members sheet below.")
-          + '</div></div>';
+          + (PEOPLE.length ? "Nobody matches that." : "Nobody added yet.") + '</div></div>';
       } else {
         html += '<div class="scroller"><table><thead><tr>'
-          + '<th style="width:76px">Unit</th><th>Name</th><th>Email</th>'
-          + '<th style="width:120px">Can do</th><th style="width:200px">Badges</th>'
-          + '<th style="width:120px">Duty</th>'
-          + '<th style="width:90px">Signed in</th><th></th></tr></thead><tbody>';
-
-        shown.forEach(function(s){
-          var m = byUnit[String(s.unit_number).toLowerCase()];
-          html += '<tr>'
-            + '<td><input class="js-rs" data-id="'+s.id+'" data-f="unit_number" '
-            +   'value="'+esc(s.unit_number)+'" style="width:68px"></td>'
-            + '<td><input class="js-rs" data-id="'+s.id+'" data-f="display_name" '
-            +   'value="'+esc(s.display_name||"")+'"></td>'
-            + '<td><input class="js-rs" data-id="'+s.id+'" data-f="email" '
-            +   'value="'+esc(s.email||"")+'" placeholder="not set"></td>'
-            + '<td><select class="js-rsel" data-id="'+s.id+'" data-f="role">'
-            +   [["member","Responder"],["dispatcher","Dispatcher"],
-                 ["admin","Administrator"],["guest","Guest"]].map(function(x){
-                  return '<option value="'+x[0]+'"'+(s.role===x[0]?" selected":"")+'>'+x[1]+'</option>';
-                }).join("")
-            + '</select></td>'
-            + '<td><div class="badgepick">'
-            +   badgeTypes.map(function(b){
-                  var on = (s.badges||[]).indexOf(b.name) > -1;
-                  return '<button class="bchip js-badge'+(on?" on":"")+'" data-id="'+s.id+'" '
-                    + 'data-b="'+esc(b.name)+'">'+esc(b.name)+'</button>';
-                }).join("")
-            + '</div></td>'
-            + '<td><select class="js-rsel" data-id="'+s.id+'" data-f="duty_status">'
-            +   ["","Primary","Backup","Observer","Off"].map(function(x){
-                  return '<option value="'+esc(x)+'"'+((s.duty_status||"")===x?" selected":"")+'>'
-                    + (x||"\u2014")+'</option>';
-                }).join("")
-            + '</select></td>'
-            + '<td>' + (m
-                ? '<span class="pill active">yes</span>'
-                : '<span class="pill pending">not yet</span>') + '</td>'
-            + '<td class="actions"><button class="xbtn js-rdel" data-id="'+s.id+'" '
-            +   'data-name="'+esc(s.unit_number)+'" title="Remove from roster">\u00D7</button></td>'
-            + '</tr>';
-        });
-        html += '</tbody></table></div>'
-          + '<p class="hint" style="margin-top:12px">Changes save as you make them. Editing a row '
-          + 'here changes what a person gets the next time they open the app.</p></div>';
-      }
-
-      /* people who signed in but have no unit */
-      if(unplaced.length){
-        html += '<div class="card"><h2>Waiting for a unit</h2>'
-          + '<p class="hint">These people signed in with a valid organization email but were not '
-          + 'on the roster. Give them a unit and they get its role and settings straight away.</p>'
-          + '<div class="scroller"><table><thead><tr><th>Who</th><th>Email</th>'
-          + '<th>Give them</th><th></th></tr></thead><tbody>';
-
-        unplaced.forEach(function(m){
-          var p = people[m.user_id] || {};
-          html += '<tr>'
-            + '<td><b>'+esc(m.display_name || p.full_name || "\u2014")+'</b></td>'
-            + '<td class="small">'+esc(p.email||"")+'</td>'
-            + '<td><select class="js-assign" data-m="'+m.id+'">'
-            +   '<option value="">Choose a unit\u2026</option>'
-            +   freeSlots.map(function(s){
-                  return '<option value="'+s.id+'">'+esc(s.unit_number)
-                    + (s.display_name ? " \u00B7 " + esc(s.display_name) : "") + '</option>';
-                }).join("")
-            + '</select></td>'
-            + '<td class="actions"><button class="btn danger js-reject" data-id="'+m.id+'" '
-            +   'style="padding:7px 11px;font-size:13px">Remove</button></td>'
+          + '<th style="width:76px">Unit</th><th>Name</th><th>Contact</th>'
+          + '<th style="width:110px">Can do</th><th>Badges</th>'
+          + '<th style="width:96px">Duty</th><th style="width:88px">Signed in</th>'
+          + '</tr></thead><tbody>';
+        shown.forEach(function(p){
+          html += '<tr class="js-person" data-id="'+p.id+'" style="cursor:pointer">'
+            + '<td><b>'+esc(p.unit_number || "\u2014")+'</b></td>'
+            + '<td><b>'+esc(personName(p))+'</b>'
+            +   (p.entry_type && p.entry_type !== "Responder"
+                  ? '<div class="small">'+esc(p.entry_type)+'</div>' : '')
+            + '</td>'
+            + '<td class="small">'+esc(p.email || "")
+            +   (p.phone ? '<br>'+esc(p.phone) : '')+'</td>'
+            + '<td>'+esc({admin:"Administrator",dispatcher:"Dispatcher",
+                          member:"Responder",guest:"Guest"}[p.role] || p.role)+'</td>'
+            + '<td>'+ (p.badges||[]).map(function(b){
+                  return '<span class="bchip on" style="cursor:default">'+esc(b)+'</span>';
+                }).join(" ") + '</td>'
+            + '<td class="small">'+esc(p.duty_status || "\u2014")+'</td>'
+            + '<td>'+(p.user_id ? '<span class="pill active">yes</span>'
+                                : '<span class="pill pending">not yet</span>')+'</td>'
             + '</tr>';
         });
         html += '</tbody></table></div></div>';
       }
 
-      html += '<div class="card"><h2>Import your roster</h2>'
-        + '<p class="hint">Upload your Members sheet. Recognised headings: First Name, Last Name, '
-        + 'Unit, Email, Admin, Dispatcher, Active, Status. Admin and Dispatcher are separate \u2014 '
-        + 'a person can be either, both or neither.</p>'
-        + '<p class="hint">Importing again updates people by unit number rather than duplicating '
-        + 'them, so it is safe to re-upload a corrected sheet.</p>'
+      html += '<div class="card"><h2>Import a list of people</h2>'
+        + '<p class="hint">Upload a spreadsheet. Recognised headings: First Name, Last Name, '
+        + 'Unit, Email, Phone, Address, DOB, Level, Type, Admin, Dispatcher, Active, Status. '
+        + 'Importing again updates people by unit number rather than duplicating them.</p>'
         + '<div class="f"><input id="mi_file" type="file" accept=".csv,.xlsx,.xls"></div>'
         + '<div id="mi_out"></div></div>';
 
@@ -562,14 +495,223 @@
         clearTimeout(window.__rst);
         window.__rst = setTimeout(function(){
           ROSTER_SEARCH = rs.value; renderMembers();
-          var again = $("rsearch");
-          if(again){ again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+          var a = $("rsearch");
+          if(a){ a.focus(); a.setSelectionRange(a.value.length, a.value.length); }
         }, 260);
       });
+      var nb = $("pp_new");
+      if(nb) nb.addEventListener("click", function(){ openPerson(null); });
     }).catch(function(e){
       el.innerHTML = '<div class="card"><div class="err">'
-        + esc(e.message||"Could not load the roster") + '</div></div>';
+        + esc(e.message || "Could not load people") + '</div></div>';
     });
+  }
+
+  /* ---------- one person, everything about them ---------- */
+  function openPerson(id){
+    var p = null;
+    for(var i=0;i<PEOPLE.length;i++){ if(PEOPLE[i].id === id) p = PEOPLE[i]; }
+    var isNew = !p;
+    if(isNew) p = { badges:[], role:"member", entry_type:"Responder", status:"active" };
+
+    var scrim = document.createElement("div");
+    scrim.className = "scrim"; scrim.id = "personScrim";
+    scrim.innerHTML = '<div class="sheet wide">'
+      + '<div class="row" style="justify-content:space-between;align-items:flex-start">'
+      +   '<h2 style="margin:0">'+esc(isNew ? "New person" : personName(p))+'</h2>'
+      +   '<button id="pp_close" class="btn">Close</button>'
+      + '</div>'
+      + '<div class="row" style="margin:12px 0 4px">'
+      +   '<button class="btn primary js-ptab" data-t="details">Details</button>'
+      +   (isNew ? '' : '<button class="btn js-ptab" data-t="certs">Certifications</button>')
+      +   (isNew ? '' : '<button class="btn js-ptab" data-t="access">Access</button>')
+      + '</div>'
+      + '<div id="pp_body"></div>';
+    document.body.appendChild(scrim);
+    scrim.addEventListener("click", function(e){ if(e.target === scrim) scrim.remove(); });
+    $("pp_close").addEventListener("click", function(){ scrim.remove(); });
+
+    function tab(which){
+      Array.prototype.forEach.call(scrim.querySelectorAll(".js-ptab"), function(b){
+        b.classList.toggle("primary", b.getAttribute("data-t") === which);
+      });
+      if(which === "details") details();
+      if(which === "certs")   certs();
+      if(which === "access")  access();
+    }
+    Array.prototype.forEach.call(scrim.querySelectorAll(".js-ptab"), function(b){
+      b.addEventListener("click", function(){ tab(b.getAttribute("data-t")); });
+    });
+
+    function details(){
+      $("pp_body").innerHTML =
+        '<div class="grid2">'
+        + '<div class="f"><label>First name</label><input id="pf_first" value="'+esc(p.first_name||"")+'"></div>'
+        + '<div class="f"><label>Last name</label><input id="pf_last" value="'+esc(p.last_name||"")+'"></div>'
+        + '<div class="f"><label>Unit number</label><input id="pf_unit" value="'+esc(p.unit_number||"")+'"></div>'
+        + '<div class="f"><label>Badge number</label><input id="pf_badge" value="'+esc(p.badge_number||"")+'"></div>'
+        + '<div class="f"><label>Email <span class="small">how they sign in</span></label>'
+        +   '<input id="pf_email" value="'+esc(p.email||"")+'"></div>'
+        + '<div class="f"><label>Phone</label><input id="pf_phone" value="'+esc(p.phone||"")+'"></div>'
+        + '<div class="f" style="grid-column:1/-1"><label>Address</label>'
+        +   '<input id="pf_addr" value="'+esc(p.address||"")+'"></div>'
+        + '<div class="f"><label>Date of birth</label>'
+        +   '<input id="pf_dob" type="date" value="'+esc(p.date_of_birth||"")+'"></div>'
+        + '<div class="f"><label>Level</label><input id="pf_level" value="'+esc(p.level||"")+'" placeholder="EMT / ALS"></div>'
+        + '<div class="f"><label>Type</label><input id="pf_type" value="'+esc(p.entry_type||"")+'" placeholder="Responder / Doctor"></div>'
+        + '<div class="f"><label>Duty</label><select id="pf_duty">'
+        +   ["","Primary","Backup","Observer","Off"].map(function(x){
+              return '<option value="'+esc(x)+'"'+((p.duty_status||"")===x?" selected":"")+'>'
+                + (x||"\u2014")+'</option>'; }).join("")
+        + '</select></div>'
+        + '<div class="f"><label>Can do</label><select id="pf_role">'
+        +   [["member","Responder"],["dispatcher","Dispatcher"],
+             ["admin","Administrator"],["guest","Guest"]].map(function(x){
+              return '<option value="'+x[0]+'"'+(p.role===x[0]?" selected":"")+'>'+x[1]+'</option>';
+            }).join("")
+        + '</select></div>'
+        + '<div class="f"><label>Status</label><select id="pf_status">'
+        +   ["active","suspended","removed"].map(function(x){
+              return '<option value="'+x+'"'+(p.status===x?" selected":"")+'>'+x+'</option>';
+            }).join("")
+        + '</select></div>'
+        + '</div>'
+        + '<div class="f"><label>Badges</label><div class="badgepick" id="pf_badges">'
+        +   BADGE_TYPES.map(function(b){
+              var on = (p.badges||[]).indexOf(b.name) > -1;
+              return '<button class="bchip js-pbadge'+(on?" on":"")+'" data-b="'+esc(b.name)+'">'
+                + esc(b.name)+'</button>';
+            }).join("")
+        + '</div></div>'
+        + '<div class="row" style="margin-top:14px">'
+        +   '<button id="pf_save" class="btn primary">Save</button>'
+        +   (isNew ? '' : '<button id="pf_del" class="btn danger">Delete this person</button>')
+        + '</div>'
+        + '<p class="hint" style="margin-top:10px">Members can change their own phone, address '
+        + 'and date of birth from the app. Everything else on this page is yours alone.</p>';
+
+      Array.prototype.forEach.call(scrim.querySelectorAll(".js-pbadge"), function(b){
+        b.addEventListener("click", function(){ b.classList.toggle("on"); });
+      });
+
+      $("pf_save").addEventListener("click", function(){
+        var badges = [];
+        Array.prototype.forEach.call(scrim.querySelectorAll(".js-pbadge.on"), function(b){
+          badges.push(b.getAttribute("data-b"));
+        });
+        var row = {
+          org_id: orgId,
+          first_name: $("pf_first").value.trim() || null,
+          last_name:  $("pf_last").value.trim()  || null,
+          unit_number:$("pf_unit").value.trim()  || null,
+          badge_number:$("pf_badge").value.trim()|| null,
+          email:      $("pf_email").value.trim().toLowerCase() || null,
+          phone:      $("pf_phone").value.trim() || null,
+          address:    $("pf_addr").value.trim()  || null,
+          date_of_birth: $("pf_dob").value || null,
+          level:      $("pf_level").value.trim() || null,
+          entry_type: $("pf_type").value.trim()  || "Responder",
+          duty_status:$("pf_duty").value || null,
+          role:       $("pf_role").value,
+          status:     $("pf_status").value,
+          badges:     badges
+        };
+        var q = isNew ? db.from("people").insert(row)
+                      : db.from("people").update(row).eq("id", p.id);
+        q.then(function(r){
+          if(r.error) return oops(r.error);
+          scrim.remove(); toast("Saved"); renderMembers();
+        }).catch(oops);
+      });
+
+      if($("pf_del")) $("pf_del").addEventListener("click", function(){
+        if(!confirm("Delete " + personName(p) + " completely? Their certifications go too.")) return;
+        db.from("people").delete().eq("id", p.id).then(function(r){
+          if(r.error) return oops(r.error);
+          scrim.remove(); toast("Deleted"); renderMembers();
+        }).catch(oops);
+      });
+    }
+
+    function certs(){
+      $("pp_body").innerHTML = '<div class="empty">Loading\u2026</div>';
+      Promise.all([
+        db.from("certification_types").select("id,name,is_required,warn_days_before,sort_order")
+          .eq("org_id", orgId).eq("is_active", true).order("sort_order"),
+        db.from("roster_certifications").select("*")
+          .eq("org_id", orgId).eq("unit_number", p.unit_number || "~none~")
+      ]).then(function(r){
+        var types = r[0].data || [], have = {};
+        (r[1].data || []).forEach(function(c){ have[c.cert_type_id] = c; });
+        if(!p.unit_number){
+          $("pp_body").innerHTML = '<div class="warn">This person has no unit number, and '
+            + 'certifications are tracked by unit. Give them one on the Details tab first.</div>';
+          return;
+        }
+        $("pp_body").innerHTML = '<div class="scroller"><table><thead><tr>'
+          + '<th>Certification</th><th style="width:150px">Expires</th>'
+          + '<th style="width:160px">Number</th><th style="width:110px">State</th>'
+          + '</tr></thead><tbody>'
+          + types.map(function(t){
+              var h = have[t.id];
+              var st = certState(h && h.expires_on, t.warn_days_before);
+              return '<tr><td><b>'+esc(t.name)+'</b>'
+                + (t.is_required ? '<span class="reqtag">REQUIRED</span>' : '') + '</td>'
+                + '<td><input class="js-pcert" data-t="'+t.id+'" data-f="expires_on" '
+                +   'type="date" value="'+esc(h && h.expires_on || "")+'"></td>'
+                + '<td><input class="js-pcert" data-t="'+t.id+'" data-f="credential_number" '
+                +   'value="'+esc(h && h.credential_number || "")+'"></td>'
+                + '<td><span class="cellkey '+st.k+'">'
+                +   (st.k === "missing" ? "nothing" : st.k) + '</span></td></tr>';
+            }).join("")
+          + '</tbody></table></div>'
+          + '<p class="hint" style="margin-top:12px">Changes save when you click out of a box.</p>';
+
+        Array.prototype.forEach.call(scrim.querySelectorAll(".js-pcert"), function(i){
+          i.addEventListener("blur", function(){
+            var patch = { org_id:orgId, unit_number:p.unit_number,
+                          cert_type_id:i.getAttribute("data-t") };
+            patch[i.getAttribute("data-f")] = i.value.trim() || null;
+            db.from("roster_certifications")
+              .upsert(patch, { onConflict:"org_id,unit_number,cert_type_id" })
+              .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
+          });
+        });
+      }).catch(oops);
+    }
+
+    function access(){
+      $("pp_body").innerHTML =
+        '<div class="srow"><label>Signs in with</label><div class="val">'
+        +   esc(p.email || "no email set \u2014 they cannot sign in") + '</div></div>'
+        + '<div class="srow"><label>Has signed in</label><div class="val">'
+        +   (p.user_id ? "yes, on " + esc(String(p.claimed_at||"").slice(0,10)) : "not yet")
+        + '</div></div>'
+        + '<p class="hint">When someone signs in with that email address, they are matched to '
+        + 'this record and get the role and badges set here.</p>'
+        + (p.user_id
+            ? '<div class="row" style="margin-top:12px">'
+              + '<button id="pa_signout" class="btn danger">Sign them out everywhere</button>'
+              + '<button id="pa_unlink" class="btn danger">Unlink their login</button></div>'
+              + '<p class="hint">Unlinking keeps the person and their certifications, but frees '
+              + 'the record so a different login can claim it.</p>'
+            : '');
+
+      if($("pa_signout")) $("pa_signout").addEventListener("click", function(){
+        if(!confirm("Sign this person out on every device?")) return;
+        db.rpc("revoke_all_devices_for_member", { p_org:orgId, p_user:p.user_id,
+                p_reason:"Signed out by an administrator" })
+          .then(function(){ toast("Signed out everywhere"); }).catch(oops);
+      });
+      if($("pa_unlink")) $("pa_unlink").addEventListener("click", function(){
+        if(!confirm("Unlink this login? The person and their records stay.")) return;
+        db.from("people").update({ user_id:null, claimed_at:null }).eq("id", p.id)
+          .then(function(r){ if(r.error) return oops(r.error);
+                             scrim.remove(); toast("Unlinked"); renderMembers(); }).catch(oops);
+      });
+    }
+
+    tab("details");
   }
 
   /* ---------- importing a roster ---------- */
@@ -1933,24 +2075,6 @@
   /* ================= CONTENT ================= */
 
   var CONTENT_SETS = {
-    directory: {
-      table: "directory_entries", label: "Directory",
-      hint: "Everyone in the org, including people who are not responders. Dates of birth and addresses stay hidden from ordinary members unless you allow them under Organization.",
-      order: "sort_order",
-      cols: [
-        { f:"sort_order",    l:"#",      w:"56px", num:true },
-        { f:"entry_type",    l:"Type",   w:"110px" },
-        { f:"first_name",    l:"First" },
-        { f:"last_name",     l:"Last" },
-        { f:"unit_number",   l:"Unit",   w:"80px" },
-        { f:"phone",         l:"Phone",  w:"130px" },
-        { f:"level",         l:"Level",  w:"80px" },
-        { f:"address",       l:"Address" },
-        { f:"date_of_birth", l:"DOB",    w:"120px" },
-        { f:"is_active",     l:"Active", w:"60px", bool:true }
-      ],
-      blank: { entry_type:"Responder", is_active:true, sort_order:999 }
-    },
     complexes: {
       table: "complexes", label: "Apartment complexes",
       hint: "The building pins themselves are placed on the map in the member app, not here.",
@@ -2034,7 +2158,7 @@
     }
   };
 
-  var CONTENT_SET = "directory";
+  var CONTENT_SET = "complexes";
 
   function renderContent(){
     var el = $("tab-content");
@@ -2254,6 +2378,9 @@
         .then(function(r){ if(r.error) return oops(r.error); toast("Suspended"); renderMembers(); });
       return;
     }
+    var pr = t.closest(".js-person");
+    if(pr){ openPerson(pr.getAttribute("data-id")); return; }
+
     var cell = t.closest(".js-cell");
     if(cell){ openCertCell(cell); return; }
 

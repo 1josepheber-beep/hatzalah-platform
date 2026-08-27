@@ -1644,11 +1644,11 @@
       }, { onConflict: "org_id,client_uuid" });
     }
 
-    // profile self-update
+    // profile self-update - one record, the person's own
     return Promise.all([
       SB.from("profiles").update({ phone: payload.phone || null })
         .eq("id", STATE.me.userId),
-      SB.from("directory_entries").update({
+      SB.from("people").update({
         phone: payload.phone || null, address: payload.address || null
       }).eq("org_id", ORG.org_id).eq("user_id", STATE.me.userId)
     ]);
@@ -1725,19 +1725,18 @@
   }
 
   function tabMembers(){
-    return SB.from("memberships")
-      .select("unit_number,display_name,role,status,duty_status,cert_level,is_dispatcher,user_id")
-      .eq("org_id", orgId()).then(function(r){
+    return SB.from("people")
+      .select("unit_number,first_name,last_name,role,status,duty_status,level,badges")
+      .eq("org_id", orgId()).order("sort_order").then(function(r){
         return (r.data || []).map(function(m){
-          var parts = str(m.display_name).split(" ");
           return {
-            "Last Name":  parts.length > 1 ? parts.slice(1).join(" ") : "",
-            "First Name": parts[0] || "",
+            "Last Name":  str(m.last_name),
+            "First Name": str(m.first_name),
             "Unit": str(m.unit_number),
             "Password": "",
             "Admin": xs(m.role === "admin"),
             "Active": xs(m.status === "active"),
-            "Dispatcher": xs(m.is_dispatcher),
+            "Dispatcher": xs(m.role === "dispatcher"),
             "Status": str(m.duty_status)
           };
         });
@@ -1757,7 +1756,8 @@
             "Address": str(d.address),
             "DOB": str(d.date_of_birth),
             "Level": str(d.level),
-            "Active": xs(d.is_active)
+            "Active": xs(d.is_active),
+            "Badge": str(d.badge_number)
           };
         });
       });
