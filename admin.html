@@ -97,6 +97,14 @@
   .warn{background:#FFF8E6;border:1px solid #E8CE86;color:#6B520C;
     padding:10px 12px;border-radius:9px;font-size:13.5px;margin-bottom:13px}
   .empty{text-align:center;color:var(--muted);padding:30px}
+  .savebar{position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:70;
+    background:#12161C;color:#fff;padding:11px 14px;border-radius:12px;display:flex;
+    align-items:center;gap:12px;box-shadow:0 8px 30px rgba(0,0,0,.28);font-size:14px}
+  .savebar .btn{padding:8px 14px;font-size:13.5px}
+  input.edited,select.edited{border-color:#C9A227;background:#FFFCF2}
+  tr.dragging{opacity:.4}
+  tr.dragover td{box-shadow:inset 0 2px 0 var(--brand)}
+  .draghandle{cursor:grab;color:#9AA4B2;font-size:16px;user-select:none}
   .badgepick{display:flex;flex-wrap:wrap;gap:4px}
   /* Scrolling right must not lose the name of the person you are reading.
      The first column and the header row both stay put. */
@@ -194,7 +202,6 @@
     <button data-tab="hospitals">Hospitals</button>
     <button data-tab="protocols">Protocols</button>
     <button data-tab="tiles">Home screen</button>
-    <button data-tab="certs">Certifications</button>
     <button data-tab="content">Content</button>
     <button data-tab="media">Images</button>
     <button data-tab="settings">Organization</button>
@@ -205,7 +212,6 @@
     <div id="tab-hospitals" class="hidden"></div>
     <div id="tab-protocols" class="hidden"></div>
     <div id="tab-tiles" class="hidden"></div>
-    <div id="tab-certs" class="hidden"></div>
     <div id="tab-content" class="hidden"></div>
     <div id="tab-media" class="hidden"></div>
     <div id="tab-settings" class="hidden"></div>
@@ -228,7 +234,72 @@
 
   var isSuper = false, orgs = [], orgId = null, org = null;
   var ROSTER_FILTER = "all", ROSTER_SEARCH = "";
-  var TABS = ["members","hospitals","protocols","certs","tiles","content","media","settings","features"];
+
+  /* Nothing saves until you say so. Edits collect here and the bar at the
+     bottom tells you how many are waiting. Moving something by accident is
+     easy; losing work because it saved itself is worse. */
+  var PENDING = {};      // "table|id" -> { table, id, patch }
+
+  function pendingCount(){ return Object.keys(PENDING).length; }
+
+  function markEdit(table, id, field, value){
+    var key = table + "|" + id;
+    if(!PENDING[key]) PENDING[key] = { table:table, id:id, patch:{} };
+    PENDING[key].patch[field] = value;
+    paintSaveBar();
+  }
+
+  function discardEdits(){
+    PENDING = {};
+    paintSaveBar();
+    render();
+  }
+
+  function paintSaveBar(){
+    var bar = $("saveBar");
+    if(!bar){
+      bar = document.createElement("div");
+      bar.id = "saveBar"; bar.className = "savebar hidden";
+      bar.innerHTML = '<span id="saveCount"></span>'
+        + '<button id="saveDiscard" class="btn">Discard</button>'
+        + '<button id="saveGo" class="btn primary">Save changes</button>';
+      document.body.appendChild(bar);
+      $("saveDiscard").addEventListener("click", function(){
+        if(confirm("Throw away your unsaved changes?")) discardEdits();
+      });
+      $("saveGo").addEventListener("click", saveEdits);
+    }
+    var n = pendingCount();
+    bar.classList.toggle("hidden", n === 0);
+    if(n) $("saveCount").textContent = n + (n === 1 ? " unsaved change" : " unsaved changes");
+  }
+
+  function saveEdits(){
+    var jobs = Object.keys(PENDING).map(function(k){
+      var e = PENDING[k];
+      return db.from(e.table).update(e.patch).eq("id", e.id);
+    });
+    if(!jobs.length) return;
+    var btn = $("saveGo"); btn.disabled = true; btn.textContent = "Saving\u2026";
+    Promise.all(jobs).then(function(rs){
+      btn.disabled = false; btn.textContent = "Save changes";
+      var bad = rs.filter(function(r){ return r && r.error; });
+      if(bad.length) return oops(bad[0].error);
+      var n = pendingCount();
+      PENDING = {}; paintSaveBar();
+      toast("Saved " + n + (n === 1 ? " change" : " changes"));
+      render();
+    }).catch(function(e){
+      btn.disabled = false; btn.textContent = "Save changes";
+      oops(e);
+    });
+  }
+
+  /* leaving with work unsaved should take a deliberate click */
+  window.addEventListener("beforeunload", function(e){
+    if(pendingCount()){ e.preventDefault(); e.returnValue = ""; }
+  });
+  var TABS = ["members","hospitals","protocols","tiles","content","media","settings","features"];
 
   /* Remember where you were. Refreshing in the middle of data entry and
      landing back on the first tab is maddening. */
@@ -361,11 +432,10 @@
 
   function render(){
     if(!org) return;
-    if(tab === "members")   renderMembers();
+    if(tab === "members")   renderMembersTab();
     if(tab === "hospitals") renderHospitals();
     if(tab === "protocols") renderProtocols();
     if(tab === "tiles") renderTiles();
-    if(tab === "certs") renderCerts();
     if(tab === "content") renderContent();
     if(tab === "media") renderMedia();
     if(tab === "settings")  renderSettings();
@@ -383,8 +453,34 @@
     return ((p.first_name || "") + " " + (p.last_name || "")).trim() || "(no name)";
   }
 
-  function renderMembers(){
+  var MEMBER_SUB = "people";
+
+  /* Members is now three views of the same people: the list, the
+     certification dashboard across all of them, and the settings for what
+     certifications this organization even tracks. */
+  function renderMembersTab(){
     var el = $("tab-members");
+    el.innerHTML = '<div class="card" style="padding:10px 14px"><div class="row">'
+      + [["people","People"],["certs","Certification dashboard"],
+         ["certtypes","What we track"]].map(function(t){
+          return '<button class="btn js-msub'+(MEMBER_SUB===t[0]?" primary":"")+'" '
+            + 'data-s="'+t[0]+'">'+esc(t[1])+'</button>';
+        }).join("")
+      + '</div></div><div id="member_body"></div>';
+
+    Array.prototype.forEach.call(el.querySelectorAll(".js-msub"), function(b){
+      b.addEventListener("click", function(){
+        MEMBER_SUB = b.getAttribute("data-s"); renderMembersTab();
+      });
+    });
+
+    if(MEMBER_SUB === "people")    renderMembers();
+    if(MEMBER_SUB === "certs")     renderCerts();
+    if(MEMBER_SUB === "certtypes") renderCertTypes();
+  }
+
+  function renderMembers(){
+    var el = $("member_body");
     el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
 
     Promise.all([
@@ -646,7 +742,8 @@
     function certs(){
       $("pp_body").innerHTML = '<div class="empty">Loading\u2026</div>';
       Promise.all([
-        db.from("certification_types").select("id,name,is_required,warn_days_before,sort_order")
+        db.from("certification_types")
+          .select("id,name,is_required,warn_days_before,sort_order,tracking")
           .eq("org_id", orgId).eq("is_active", true).order("sort_order"),
         db.from("roster_certifications").select("*")
           .eq("org_id", orgId).eq("unit_number", p.unit_number || "~none~")
@@ -686,6 +783,18 @@
             }).join("")
           + '</tbody></table></div>'
           + '<p class="hint" style="margin-top:12px">Changes save when you click out of a box.</p>';
+
+        Array.prototype.forEach.call(scrim.querySelectorAll(".js-pdone"), function(cb){
+          cb.addEventListener("change", function(){
+            db.from("roster_certifications").upsert({
+              org_id: orgId, unit_number: p.unit_number,
+              cert_type_id: cb.getAttribute("data-t"),
+              completed: cb.checked,
+              completed_on: cb.checked ? new Date().toISOString().slice(0,10) : null
+            }, { onConflict:"org_id,unit_number,cert_type_id" })
+             .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
+          });
+        });
 
         Array.prototype.forEach.call(scrim.querySelectorAll(".js-pview"), function(b){
           b.addEventListener("click", function(){
@@ -939,15 +1048,16 @@
           el.innerHTML = html; wireTiles(); return;
         }
 
-        html += '<div class="scroller tall"><table><thead><tr>'
-          + '<th style="width:70px">Order</th><th>Name</th><th>Opens</th><th>Target</th>'
-          + '<th>Admin only</th><th>On</th><th></th></tr></thead><tbody>';
+        html += '<p class="hint">Drag a row by the handle to move it. Nothing is saved until '
+          + 'you press Save changes.</p>'
+          + '<div class="scroller tall"><table><thead><tr>'
+          + '<th style="width:44px"></th><th>Name</th><th>Opens</th><th>Target</th>'
+          + '<th>Admin only</th><th>On</th><th></th></tr></thead><tbody id="tileRows">';
 
         rows.forEach(function(t){
           var needsTarget = (t.kind === "link" || t.kind === "app");
-          html += '<tr>'
-            + '<td><input class="js-t" data-id="'+t.id+'" data-f="sort_order" '
-            +   'value="'+esc(t.sort_order)+'" inputmode="decimal" style="width:60px"></td>'
+          html += '<tr draggable="true" class="js-trow" data-id="'+t.id+'">'
+            + '<td class="draghandle" title="Drag to move">\u2630</td>'
             + '<td><input class="js-t" data-id="'+t.id+'" data-f="label" value="'+esc(t.label)+'"></td>'
             + '<td><select class="js-tsel" data-id="'+t.id+'" data-f="kind">'
             +   TILE_KINDS.map(function(k){
@@ -975,6 +1085,7 @@
   }
 
   function wireTiles(){
+    wireTileDrag();
     var add = $("nt_add");
     if(!add) return;
     add.addEventListener("click", function(){
@@ -1604,6 +1715,44 @@
   }
 
 
+  /* Dragging a row changes the order it will be saved in. The numbers are
+     an implementation detail nobody should have to type. */
+  function wireTileDrag(){
+    var body = $("tileRows");
+    if(!body) return;
+    var dragging = null;
+
+    Array.prototype.forEach.call(body.querySelectorAll(".js-trow"), function(tr){
+      tr.addEventListener("dragstart", function(e){
+        dragging = tr; tr.classList.add("dragging");
+        try{ e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain",""); }catch(x){}
+      });
+      tr.addEventListener("dragend", function(){
+        tr.classList.remove("dragging");
+        Array.prototype.forEach.call(body.querySelectorAll(".js-trow"), function(r){
+          r.classList.remove("dragover");
+        });
+        dragging = null;
+        restack();
+      });
+      tr.addEventListener("dragover", function(e){
+        e.preventDefault();
+        if(!dragging || dragging === tr) return;
+        tr.classList.add("dragover");
+        var box = tr.getBoundingClientRect();
+        var after = (e.clientY - box.top) > box.height / 2;
+        body.insertBefore(dragging, after ? tr.nextSibling : tr);
+      });
+      tr.addEventListener("dragleave", function(){ tr.classList.remove("dragover"); });
+    });
+
+    function restack(){
+      Array.prototype.forEach.call(body.querySelectorAll(".js-trow"), function(tr, i){
+        markEdit("tiles", tr.getAttribute("data-id"), "sort_order", (i + 1) * 10);
+      });
+    }
+  }
+
   /* ================= IMAGES ================= */
 
   var MEDIA_KINDS = [
@@ -1852,7 +2001,12 @@
 
   var CERT_FILTER = "all", CERT_SEARCH = "", CERT_WHO = "member";
 
-  function certState(exp, warnDays){
+  function certState(exp, warnDays, type, held){
+    if(type === "completion"){
+      return (held && held.completed)
+        ? { k:"ok", label:"done" }
+        : { k:"missing", label:"\u2014" };
+    }
     if(!exp) return { k:"missing", label:"\u2014" };
     var d = new Date(exp + "T00:00:00");
     var days = Math.round((d - new Date()) / 86400000);
@@ -1862,17 +2016,17 @@
   }
 
   function renderCerts(){
-    var el = $("tab-certs");
+    var el = $("member_body");
     el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
 
     Promise.all([
       db.from("certification_types")
-        .select("id,name,is_required,warn_days_before,sort_order")
+        .select("id,name,is_required,warn_days_before,sort_order,tracking")
         .eq("org_id", orgId).eq("is_active", true).order("sort_order"),
       db.from("roster_slots").select("id,unit_number,display_name,role,status")
         .eq("org_id", orgId).order("unit_number"),
       db.from("roster_certifications")
-        .select("id,unit_number,cert_type_id,credential_number,expires_on,file_path")
+        .select("id,unit_number,cert_type_id,credential_number,expires_on,file_path,completed,completed_on")
         .eq("org_id", orgId),
       db.from("member_certifications")
         .select("id,user_id,cert_type_id,credential_number,expires_on,status,file_path,rejected_reason")
@@ -1899,7 +2053,8 @@
       rcerts.forEach(function(c){
         held[(c.unit_number||"").toLowerCase() + "|" + c.cert_type_id] = {
           expires_on:c.expires_on, credential_number:c.credential_number,
-          file_path:c.file_path, source:"roster", id:c.id
+          file_path:c.file_path, completed:c.completed, completed_on:c.completed_on,
+          source:"roster", id:c.id
         };
       });
       mcerts.forEach(function(c){
@@ -1920,7 +2075,7 @@
           var h = held[(p.unit_number||"").toLowerCase() + "|" + t.id];
           counts.all++;
           if(h && h.status === "pending"){ counts.pending++; return; }
-          var st = certState(h && h.expires_on, t.warn_days_before);
+          var st = certState(h && h.expires_on, t.warn_days_before, t.tracking, h);
           if(st.k === "expired") counts.expired++;
           else if(st.k === "soon") counts.soon++;
           else if(st.k === "missing" && t.is_required) counts.missing++;
@@ -1940,7 +2095,7 @@
         return types.some(function(t){
           var h = held[(p.unit_number||"").toLowerCase() + "|" + t.id];
           if(CERT_FILTER === "pending") return h && h.status === "pending";
-          var st = certState(h && h.expires_on, t.warn_days_before);
+          var st = certState(h && h.expires_on, t.warn_days_before, t.tracking, h);
           if(CERT_FILTER === "missing") return st.k === "missing" && t.is_required;
           return st.k === CERT_FILTER;
         });
@@ -2010,11 +2165,13 @@
               var h = held[key];
               var st = (h && h.status === "pending")
                 ? { k:"pending", label:(h.expires_on || "sent in") }
-                : certState(h && h.expires_on, t.warn_days_before);
+                : certState(h && h.expires_on, t.warn_days_before, t.tracking, h);
               var title = h && h.credential_number ? h.credential_number : "";
               return '<td class="cell '+st.k+' js-cell" data-unit="'+esc(p.unit_number||"")+'" '
                 + 'data-type="'+t.id+'" data-name="'+esc(t.name)+'" '
                 + 'data-person="'+esc(p.display_name||"")+'" '
+                + 'data-track="'+esc(t.tracking || "expiry")+'" '
+                + 'data-done="'+((h && h.completed) ? "1" : "")+'" '
                 + 'data-exp="'+esc(h && h.expires_on || "")+'" '
                 + 'data-num="'+esc(h && h.credential_number || "")+'" '
                 + 'data-file="'+esc(h && h.file_path || "")+'" '
@@ -2130,13 +2287,25 @@
     });
 
     $("cc_save").addEventListener("click", function(){
-      var exp = $("cc_exp").value || null, num = $("cc_num").value.trim() || null;
-      saveRoster({ expires_on:exp, credential_number:num }).then(function(r){
+      var num = $("cc_num").value.trim() || null;
+      var patch;
+      if($("cc_done")){
+        patch = { completed: $("cc_done").checked,
+                  completed_on: $("cc_done").checked ? new Date().toISOString().slice(0,10) : null,
+                  credential_number: num };
+      } else {
+        patch = { expires_on: $("cc_exp").value || null, credential_number: num };
+      }
+      var exp = patch.expires_on || null;
+      saveRoster(patch).then(function(r){
         if(r.error) throw r.error;
         if(mid){
-          return db.from("member_certifications")
-            .update({ expires_on:exp, credential_number:num, status:"verified",
-                      verified_at:new Date().toISOString() }).eq("id", mid);
+          var mp = { credential_number:num, status:"verified",
+                     verified_at:new Date().toISOString() };
+          if(patch.expires_on !== undefined) mp.expires_on = patch.expires_on;
+          if(patch.completed  !== undefined){ mp.completed = patch.completed;
+                                              mp.completed_on = patch.completed_on; }
+          return db.from("member_certifications").update(mp).eq("id", mid);
         }
       }).then(function(){ close(); toast("Saved"); renderCerts(); }).catch(oops);
     });
@@ -2162,6 +2331,85 @@
         .then(function(r){ if(r.error) return oops(r.error);
                            close(); toast("Rejected"); renderCerts(); }).catch(oops);
     });
+  }
+
+  /* ---------- what this organization tracks ---------- */
+  function renderCertTypes(){
+    var el = $("member_body");
+    el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
+
+    db.from("certification_types").select("*").eq("org_id", orgId).order("sort_order")
+      .then(function(r){
+        if(r.error) throw r.error;
+        var rows = r.data || [];
+
+        var html = '<div class="card"><h2>Add a certification</h2>'
+          + '<p class="hint">What this organization keeps track of. Every person gets a row for '
+          + 'each one.</p>'
+          + '<div class="grid2">'
+          +   '<div class="f"><label>Name</label><input id="nc_name" placeholder="NREMT"></div>'
+          +   '<div class="f"><label>How is it tracked?</label><select id="nc_track">'
+          +     '<option value="expiry">It expires on a date</option>'
+          +     '<option value="completion">Done once, stays done</option>'
+          +   '</select></div>'
+          + '</div>'
+          + '<label class="row" style="margin-bottom:12px"><input type="checkbox" id="nc_req" '
+          +   'style="width:auto"> <span>Required \u2014 shows as missing when nobody has it</span></label>'
+          + '<button id="nc_add" class="btn primary">Add it</button></div>';
+
+        html += '<div class="card"><h2>'+rows.length+' certifications</h2>'
+          + '<p class="hint">Change how something is tracked and the dashboard changes with it. '
+          + 'A dated one warns you before it runs out; a done-or-not one never expires.</p>'
+          + '<div class="scroller tall"><table><thead><tr>'
+          + '<th style="width:56px">#</th><th>Name</th><th style="width:180px">Tracked as</th>'
+          + '<th style="width:150px">Issued by</th><th style="width:120px">Valid (months)</th>'
+          + '<th style="width:110px">Warn (days)</th><th style="width:80px">Required</th>'
+          + '<th style="width:60px">On</th><th></th></tr></thead><tbody>';
+
+        rows.forEach(function(t){
+          var dated = t.tracking !== "completion";
+          html += '<tr>'
+            + '<td><input class="js-ct" data-id="'+t.id+'" data-f="sort_order" '
+            +   'value="'+esc(t.sort_order)+'" inputmode="decimal" style="width:48px"></td>'
+            + '<td><input class="js-ct" data-id="'+t.id+'" data-f="name" value="'+esc(t.name)+'"></td>'
+            + '<td><select class="js-ctsel" data-id="'+t.id+'" data-f="tracking">'
+            +   '<option value="expiry"'+(dated?" selected":"")+'>Expires on a date</option>'
+            +   '<option value="completion"'+(dated?"":" selected")+'>Done or not done</option>'
+            + '</select></td>'
+            + '<td><input class="js-ct" data-id="'+t.id+'" data-f="issuing_body" '
+            +   'value="'+esc(t.issuing_body||"")+'"></td>'
+            + '<td><input class="js-ct" data-id="'+t.id+'" data-f="validity_months" '
+            +   'value="'+esc(t.validity_months||"")+'" inputmode="numeric"'
+            +   (dated?"":' disabled placeholder="\u2014"')+'></td>'
+            + '<td><input class="js-ct" data-id="'+t.id+'" data-f="warn_days_before" '
+            +   'value="'+esc(t.warn_days_before||"")+'" inputmode="numeric"'
+            +   (dated?"":' disabled placeholder="\u2014"')+'></td>'
+            + '<td style="text-align:center"><input type="checkbox" class="js-ctchk" '
+            +   'data-id="'+t.id+'" data-f="is_required" '+(t.is_required?"checked":"")+'></td>'
+            + '<td style="text-align:center"><input type="checkbox" class="js-ctchk" '
+            +   'data-id="'+t.id+'" data-f="is_active" '+(t.is_active?"checked":"")+'></td>'
+            + '<td class="actions"><button class="xbtn js-ctdel" data-id="'+t.id+'" '
+            +   'data-name="'+esc(t.name)+'" title="Delete">\u00D7</button></td></tr>';
+        });
+        html += '</tbody></table></div></div>';
+        el.innerHTML = html;
+
+        $("nc_add").addEventListener("click", function(){
+          var nm = $("nc_name").value.trim();
+          if(!nm){ toast("Give it a name."); return; }
+          db.from("certification_types").insert({
+            org_id: orgId, name: nm, tracking: $("nc_track").value,
+            is_required: $("nc_req").checked, is_active: true,
+            warn_days_before: 60, sort_order: 999
+          }).then(function(r){
+            if(r.error) return oops(r.error);
+            toast("Added " + nm); renderCertTypes();
+          }).catch(oops);
+        });
+      }).catch(function(e){
+        el.innerHTML = '<div class="card"><div class="err">'
+          + esc(e.message||"Could not load") + '</div></div>';
+      });
   }
 
   /* ================= CONTENT ================= */
@@ -2210,7 +2458,7 @@
       ],
       blank: { action:"log", is_active:true, sort_order:999 }
     },
-    certtypes: {
+    __certtypes_moved: {
       table: "certification_types", label: "Certification types",
       hint: "What this organization tracks. Required ones show as missing when nobody has submitted them.",
       order: "sort_order",
@@ -2507,6 +2755,16 @@
       return;
     }
 
+    var ctd = t.closest(".js-ctdel");
+    if(ctd){
+      if(!confirm("Delete " + ctd.getAttribute("data-name")
+          + "? Every record of it goes too.")) return;
+      db.from("certification_types").delete().eq("id", ctd.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error);
+                           toast("Deleted"); renderCertTypes(); });
+      return;
+    }
+
     var cd = t.closest(".js-cdel");
     if(cd){
       if(!confirm("Delete this row?")) return;
@@ -2613,10 +2871,19 @@
         }).catch(oops);
       return;
     }
+    if(el.classList && el.classList.contains("js-ctsel")){
+      markEdit("certification_types", el.getAttribute("data-id"),
+               el.getAttribute("data-f"), el.value);
+      return;
+    }
+    if(el.classList && el.classList.contains("js-ctchk")){
+      markEdit("certification_types", el.getAttribute("data-id"),
+               el.getAttribute("data-f"), el.checked);
+      return;
+    }
     if(el.classList && el.classList.contains("js-cbool")){
-      var cp = {}; cp[el.getAttribute("data-f")] = el.checked;
-      db.from(CONTENT_SETS[CONTENT_SET].table).update(cp).eq("id", el.getAttribute("data-id"))
-        .then(function(r){ if(r.error) return oops(r.error); toast("Saved"); });
+      markEdit(CONTENT_SETS[CONTENT_SET].table, el.getAttribute("data-id"),
+               el.getAttribute("data-f"), el.checked);
       return;
     }
     if(el.classList && el.classList.contains("js-disp")){
@@ -2646,15 +2913,22 @@
         .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
       return;
     }
+    if(i.classList && i.classList.contains("js-ct")){
+      var ctf = i.getAttribute("data-f"), ctv = i.value.trim();
+      var num = (ctf === "sort_order" || ctf === "validity_months" || ctf === "warn_days_before");
+      markEdit("certification_types", i.getAttribute("data-id"), ctf,
+               num ? (ctv === "" ? null : parseFloat(ctv)) : (ctv || null));
+      i.classList.add("edited");
+      return;
+    }
     if(i.classList && i.classList.contains("js-cin")){
       var set = CONTENT_SETS[CONTENT_SET];
       var cf = i.getAttribute("data-f"), cv = i.value.trim();
       var isNum = false;
       set.cols.forEach(function(c){ if(c.f === cf && c.num) isNum = true; });
-      var cp = {};
-      cp[cf] = isNum ? (parseFloat(cv) || 0) : (cv || null);
-      db.from(set.table).update(cp).eq("id", i.getAttribute("data-id"))
-        .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
+      markEdit(set.table, i.getAttribute("data-id"), cf,
+               isNum ? (parseFloat(cv) || 0) : (cv || null));
+      i.classList.add("edited");
       return;
     }
     if(i.classList && i.classList.contains("js-duty")){
@@ -2665,23 +2939,22 @@
     }
     if(i.classList && i.classList.contains("js-t")){
       var tf = i.getAttribute("data-f"), tv = i.value.trim();
-      var tp = {};
-      tp[tf] = (tf === "sort_order") ? (parseFloat(tv) || 999) : (tv || null);
-      db.from("tiles").update(tp).eq("id", i.getAttribute("data-id"))
-        .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
+      markEdit("tiles", i.getAttribute("data-id"), tf,
+               (tf === "sort_order") ? (parseFloat(tv) || 999) : (tv || null));
+      i.classList.add("edited");
       return;
     }
     if(!i.classList || !i.classList.contains("js-h")) return;
     var f = i.getAttribute("data-f"), v = i.value.trim();
-    var patch = {};
+    var val;
     if(f === "lat" || f === "lng"){
       if(v && isNaN(parseFloat(v))){ toast("Coordinates must be numbers."); return; }
-      patch[f] = v ? parseFloat(v) : null;
+      val = v ? parseFloat(v) : null;
     } else {
-      patch[f] = v || null;
+      val = v || null;
     }
-    db.from("hospitals").update(patch).eq("id", i.getAttribute("data-id"))
-      .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
+    markEdit("hospitals", i.getAttribute("data-id"), f, val);
+    i.classList.add("edited");
   }, true);
 
   document.addEventListener("change", function(e){
