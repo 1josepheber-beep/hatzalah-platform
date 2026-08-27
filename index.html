@@ -123,6 +123,31 @@
   .missing{margin-top:10px;color:#98A2B3;font-size:13px}
   .empty{text-align:center;color:var(--muted);padding:44px 20px}
 
+  /* ---------- protocols ---------- */
+  .psec{margin-bottom:16px}
+  .psec h3{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+    margin:0 0 8px;font-weight:650}
+  .pitem{width:100%;text-align:left;background:var(--card);border:1px solid var(--line);
+    border-radius:12px;padding:13px;margin-bottom:8px;display:flex;gap:11px;align-items:flex-start}
+  .pitem .pg{flex:none;min-width:44px;height:34px;border-radius:8px;background:var(--brand);
+    color:var(--on-brand);display:flex;align-items:center;justify-content:center;
+    font-size:14px;font-weight:650;font-variant-numeric:tabular-nums}
+  .pitem b{display:block;font-size:15px;font-weight:600;line-height:1.3}
+  .pitem .snip{font-size:13px;color:var(--muted);margin-top:4px;line-height:1.4}
+  .pitem mark{background:#FFF0B3;color:inherit;padding:0 2px;border-radius:3px}
+
+  /* ---------- reader ---------- */
+  .reader{position:fixed;inset:0;z-index:50;background:#0B1017;display:flex;flex-direction:column}
+  .rbar{display:flex;align-items:center;gap:9px;padding:calc(8px + env(safe-area-inset-top)) 12px 8px;
+    background:#111823;color:#fff}
+  .rbar span{flex:1;font-size:14px;font-variant-numeric:tabular-nums;text-align:center}
+  .rstage{flex:1;overflow:auto;display:flex;align-items:flex-start;justify-content:center;
+    -webkit-overflow-scrolling:touch}
+  .rstage img{max-width:100%;height:auto;display:block;transform-origin:top center;
+    transition:transform .18s ease}
+  .rhint{padding:7px 12px calc(7px + env(safe-area-inset-bottom));background:#111823;
+    color:#8A97A8;font-size:12px;text-align:center}
+
   /* ---------- sheet ---------- */
   .scrim{position:fixed;inset:0;background:rgba(10,16,26,.5);z-index:40;
     display:flex;align-items:flex-end}
@@ -197,12 +222,33 @@
       <div id="callRow" class="callrow"></div>
       <div id="tiles" class="tiles"></div>
     </section>
+    <!-- protocols -->
+    <section id="protoScreen" class="hidden">
+      <div id="protoResults"></div>
+    </section>
     <!-- hospitals -->
     <section id="hospScreen" class="hidden">
       <div id="count" class="count"></div>
       <div id="list"></div>
     </section>
   </main>
+</div>
+
+<div id="reader" class="reader hidden">
+  <div class="rbar">
+    <button id="rClose" class="icobtn" aria-label="Close">
+      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <span id="rLabel">—</span>
+    <button id="rPrev" class="icobtn" aria-label="Previous page">
+      <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <button id="rNext" class="icobtn" aria-label="Next page">
+      <svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
+    </button>
+  </div>
+  <div id="rStage" class="rstage"><img id="rImg" alt=""></div>
+  <div class="rhint">Pinch or double-tap to zoom</div>
 </div>
 
 <div id="menuScrim" class="scrim hidden">
@@ -237,7 +283,7 @@
 
   /* which tiles actually have a screen built. Everything else shows
      "Coming soon" rather than pretending to work. */
-  var BUILT = { "/hospitals": true };
+  var BUILT = { "/hospitals": true, "/protocols": true };
 
   var ICONS = {
     hospital:'<path d="M12 6v12M6 12h12"/><rect x="3" y="3" width="18" height="18" rx="3"/>',
@@ -257,6 +303,7 @@
 
   var org = null, me = null, tiles = [], features = {},
       hospitals = [], specs = [], filters = {}, fromCache = false, screen = "home";
+  var protoSets = [], protoToc = [], protoHits = [], reader = null;
 
   /* ---------- storage, always guarded ---------- */
   function put(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
@@ -390,6 +437,7 @@
     if(c){
       me = c.me; tiles = c.tiles || []; features = c.features || {};
       hospitals = c.hospitals || []; specs = c.specs || [];
+      protoSets = c.protoSets || []; protoToc = c.protoToc || [];
       fromCache = true; renderHome();
     }
 
@@ -405,7 +453,11 @@
         .select("name,phone_call,phone_red,address,door_code,lat,lng,specialties,sort_order")
         .eq("org_id", org.org_id).eq("is_active", true).order("sort_order"),
       db.from("hospital_specialties").select("name,label,css_class,is_key,sort_order")
-        .eq("org_id", org.org_id).eq("is_active", true).order("sort_order")
+        .eq("org_id", org.org_id).eq("is_active", true).order("sort_order"),
+      db.from("protocol_sets").select("id,name,version,page_count")
+        .eq("org_id", org.org_id).eq("is_published", true).order("created_at",{ascending:false}),
+      db.from("protocol_toc").select("set_id,name,volume,page_number,page_label,sort_order")
+        .eq("org_id", org.org_id).order("sort_order")
     ]).then(function(r){
       if(r[0].data) me = r[0].data;
       if(r[1].data){
@@ -421,6 +473,8 @@
       (r[3].data || []).forEach(function(f){ features[f.feature_key] = f.enabled; });
       hospitals = r[4].data || [];
       specs     = r[5].data || [];
+      protoSets = r[6].data || [];
+      protoToc  = r[7].data || [];
       fromCache = false;
 
       if(!me || me.status !== "active"){
@@ -434,7 +488,8 @@
       }
 
       put(cacheKey(), {me:me, tiles:tiles, features:features,
-                       hospitals:hospitals, specs:specs, org:org});
+                       hospitals:hospitals, specs:specs, org:org,
+                       protoSets:protoSets, protoToc:protoToc});
       renderHome();
     }).catch(function(){
       if(!tiles.length){
@@ -455,6 +510,7 @@
     show($("chips"), false);
     show($("homeScreen"), true);
     show($("hospScreen"), false);
+    show($("protoScreen"), false);
     show($("offline"), fromCache || !navigator.onLine);
     if(me && me.unit_number){
       $("unitBadge").textContent = me.unit_number;
@@ -513,11 +569,209 @@
       if(kind === "link"){ window.open(target, "_blank", "noopener"); return; }
       if(kind === "phone"){ dial(target); return; }
       if(target === "/hospitals") openHospitals();
+      if(target === "/protocols") openProtocols();
       return;
     }
   });
 
   $("backBtn").addEventListener("click", renderHome);
+
+  /* =============== protocols ===============
+     Search finds the words; the page image is what you read. Exactly the
+     way the printed book looks, because it IS the page. */
+
+  function openProtocols(){
+    screen = "protocols";
+    $("screenTitle").textContent = "Protocols";
+    show($("backBtn"), true);
+    show($("unitBadge"), false);
+    show($("chips"), false);
+    show($("searchWrap"), true);
+    $("search").placeholder = "Search protocols";
+    $("search").value = "";
+    show($("homeScreen"), false);
+    show($("hospScreen"), false);
+    show($("protoScreen"), true);
+    renderProtocols();
+  }
+
+  function activeSet(){ return protoSets.length ? protoSets[0] : null; }
+
+  function pageUrl(setId, pageNumber){
+    var path = org.org_id + "/protocols/" + setId + "/p"
+             + String(pageNumber).padStart(4, "0") + ".jpg";
+    return db.storage.from("org-media").createSignedUrl(path, 3600);
+  }
+
+  function renderProtocols(){
+    var q = $("search").value.trim();
+    var set = activeSet();
+    var el = $("protoResults");
+
+    if(!set){
+      el.innerHTML = '<div class="empty">No protocol book has been published yet.<br>'
+        + 'Your administrator adds it from the admin page.</div>';
+      return;
+    }
+
+    if(!q){
+      var toc = protoToc.filter(function(t){ return t.set_id === set.id; });
+      var html = '<div class="psec"><h3>'+esc(set.name)
+               + (set.version ? " \u00B7 " + esc(set.version) : "")
+               + '</h3>';
+
+      if(toc.length){
+        var vol = null;
+        toc.forEach(function(t){
+          if(t.volume && t.volume !== vol){
+            vol = t.volume;
+            html += '</div><div class="psec"><h3>'+esc(vol)+'</h3>';
+          }
+          html += '<button class="pitem js-page" data-p="'+t.page_number+'">'
+               +    '<span class="pg">'+esc(t.page_label || t.page_number)+'</span>'
+               +    '<span><b>'+esc(t.name)+'</b></span></button>';
+        });
+      } else {
+        html += '<button class="pitem js-page" data-p="1">'
+             +    '<span class="pg">1</span>'
+             +    '<span><b>Open the book</b>'
+             +      '<span class="snip">'+set.page_count+' pages. '
+             +      'Type above to search for a word or a protocol.</span></span></button>';
+      }
+      html += '</div>';
+      el.innerHTML = html;
+      return;
+    }
+
+    if(q.length < 2){ el.innerHTML = '<div class="empty">Keep typing\u2026</div>'; return; }
+
+    el.innerHTML = '<div class="empty">Searching\u2026</div>';
+
+    db.from("protocol_pages")
+      .select("page_number,page_label,body_text")
+      .eq("set_id", set.id)
+      .textSearch("search_tsv", q, { type:"websearch", config:"english" })
+      .order("page_number")
+      .limit(40)
+      .then(function(r){
+        if(r.error){
+          // fall back to a plain contains search if the phrasing upsets the index
+          return db.from("protocol_pages")
+            .select("page_number,page_label,body_text")
+            .eq("set_id", set.id)
+            .ilike("body_text", "%" + q + "%")
+            .order("page_number").limit(40);
+        }
+        return r;
+      })
+      .then(function(r){
+        if(r.error) throw r.error;
+        var rows = r.data || [];
+        if(!rows.length){
+          el.innerHTML = '<div class="empty">Nothing found for \u201C'+esc(q)+'\u201D.</div>';
+          return;
+        }
+        el.innerHTML = '<div class="psec"><h3>'+rows.length
+          + (rows.length === 1 ? ' page' : ' pages') + '</h3>'
+          + rows.map(function(p){
+              return '<button class="pitem js-page" data-p="'+p.page_number+'">'
+                + '<span class="pg">'+esc(p.page_label || p.page_number)+'</span>'
+                + '<span><b>Page '+p.page_number+'</b>'
+                + '<span class="snip">'+snippet(p.body_text, q)+'</span></span></button>';
+            }).join("") + '</div>';
+      })
+      .catch(function(){
+        el.innerHTML = '<div class="empty">Search needs a connection.<br>'
+          + 'You can still open the book and turn pages.</div>';
+      });
+  }
+
+  /* a short piece of the page around the first match, with it highlighted */
+  function snippet(text, q){
+    if(!text) return "";
+    var words = q.split(/\s+/).filter(function(w){ return w.length > 2; });
+    var lower = text.toLowerCase(), at = -1, hit = "";
+    for(var i=0;i<words.length && at<0;i++){
+      at = lower.indexOf(words[i].toLowerCase());
+      if(at > -1) hit = words[i];
+    }
+    if(at < 0) return esc(text.slice(0, 110)) + "\u2026";
+    var start = Math.max(0, at - 45);
+    var piece = text.slice(start, start + 150);
+    var out = esc(piece);
+    if(hit){
+      out = out.replace(new RegExp("(" + hit.replace(/[.*+?^${}()|[\]\\]/g,"\\$&") + ")", "ig"),
+                        "<mark>$1</mark>");
+    }
+    return (start > 0 ? "\u2026" : "") + out + "\u2026";
+  }
+
+  /* ---- the page reader ---- */
+  function openReader(pageNumber){
+    var set = activeSet();
+    if(!set) return;
+    reader = { set:set, page:Math.min(Math.max(1, pageNumber), set.page_count || 9999), zoom:1 };
+    $("reader").classList.remove("hidden");
+    showPage();
+  }
+
+  function showPage(){
+    var r = reader;
+    $("rLabel").textContent = "Page " + r.page
+      + (r.set.page_count ? " of " + r.set.page_count : "");
+    $("rImg").removeAttribute("src");
+    r.zoom = 1; $("rImg").style.transform = "scale(1)";
+    $("rStage").scrollTop = 0;
+
+    pageUrl(r.set.id, r.page).then(function(res){
+      if(res.error || !res.data){ return; }
+      $("rImg").src = res.data.signedUrl;
+      // quietly fetch the next page so turning forward feels instant
+      if(r.set.page_count && r.page < r.set.page_count){
+        pageUrl(r.set.id, r.page + 1).then(function(n){
+          if(n.data){ var pre = new Image(); pre.src = n.data.signedUrl; }
+        }).catch(function(){});
+      }
+    }).catch(function(){});
+  }
+
+  function turn(by){
+    if(!reader) return;
+    var next = reader.page + by;
+    if(next < 1) return;
+    if(reader.set.page_count && next > reader.set.page_count) return;
+    reader.page = next;
+    showPage();
+  }
+
+  $("rClose").addEventListener("click", function(){
+    $("reader").classList.add("hidden"); reader = null;
+  });
+  $("rPrev").addEventListener("click", function(){ turn(-1); });
+  $("rNext").addEventListener("click", function(){ turn(1); });
+
+  /* double-tap to zoom, same as the printed-page feel */
+  var lastTap = 0;
+  $("rStage").addEventListener("click", function(){
+    var now = Date.now();
+    if(now - lastTap < 320){
+      reader.zoom = reader.zoom > 1 ? 1 : 2.2;
+      $("rImg").style.transform = "scale(" + reader.zoom + ")";
+    }
+    lastTap = now;
+  });
+
+  document.addEventListener("keydown", function(e){
+    if($("reader").classList.contains("hidden")) return;
+    if(e.key === "ArrowLeft")  turn(-1);
+    if(e.key === "ArrowRight") turn(1);
+    if(e.key === "Escape"){ $("reader").classList.add("hidden"); reader = null; }
+  });
+
+  $("protoResults").addEventListener("click", function(e){
+    var b = e.target.closest && e.target.closest(".js-page");
+    if(b) openReader(parseInt(b.getAttribute("data-p"), 10));
+  });
 
   /* =============== hospitals =============== */
   function openHospitals(){
@@ -526,8 +780,11 @@
     show($("backBtn"), true);
     show($("unitBadge"), false);
     show($("searchWrap"), true);
+    $("search").placeholder = "Search hospitals";
+    $("search").value = "";
     show($("chips"), true);
     show($("homeScreen"), false);
+    show($("protoScreen"), false);
     show($("hospScreen"), true);
     buildChips();
     renderHospitals();
@@ -653,7 +910,9 @@
     }
   });
 
-  $("search").addEventListener("input", renderHospitals);
+  $("search").addEventListener("input", function(){
+    if(screen === "protocols") renderProtocols(); else renderHospitals();
+  });
   window.addEventListener("online",  function(){ if(screen==="hospitals") renderHospitals(); else renderHome(); });
   window.addEventListener("offline", function(){ if(screen==="hospitals") renderHospitals(); else renderHome(); });
 
