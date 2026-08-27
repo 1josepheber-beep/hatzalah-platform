@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin — Hatzalah Platform</title>
+<style>
+  :root{
+    --brand:#143D75; --brand-deep:#0D2A52; --ink:#12161C; --muted:#5C6675;
+    --line:#DFE4EC; --bg:#F4F6FA; --card:#fff; --red:#B3121B; --green:#1B7F3B;
+    --amber:#8A6A1A;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);
+    font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .hidden{display:none !important}
+  button,input,select,textarea{font:inherit}
+  :focus-visible{outline:2px solid #7FA8E0;outline-offset:2px}
+
+  /* sign in */
+  #login{min-height:100dvh;display:flex;align-items:center;justify-content:center;
+    background:var(--brand);padding:24px}
+  #login .box{width:100%;max-width:380px;color:#fff}
+  #login h1{font-size:23px;margin:0 0 4px;font-weight:650}
+  #login p{margin:0 0 24px;opacity:.7}
+  .f{margin-bottom:13px}
+  .f label{display:block;font-size:13px;margin-bottom:5px;opacity:.8}
+  .f input,.f select,.f textarea{width:100%;padding:11px;border-radius:9px;
+    border:1px solid var(--line);background:#fff;color:var(--ink);font-size:15px}
+  #login .f input{border-color:rgba(255,255,255,.25);background:rgba(0,0,0,.22);color:#fff}
+  .btn{padding:11px 16px;border-radius:9px;border:1px solid var(--line);
+    background:#fff;color:var(--ink);font-weight:600;cursor:pointer}
+  .btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+  .btn.danger{background:#FDECEC;border-color:#F0BEC0;color:var(--red)}
+  .btn.ok{background:#EAF4EC;border-color:#B9DCC4;color:var(--green)}
+  .btn:disabled{opacity:.5;cursor:default}
+  #login .btn{width:100%;background:#fff;color:var(--brand);border:0;padding:13px}
+  .err{background:#FDECEC;border:1px solid #F0BEC0;color:var(--red);
+    padding:10px 12px;border-radius:8px;font-size:14px;margin-bottom:13px}
+  #login .err{background:rgba(0,0,0,.3);border-color:rgba(255,255,255,.3);color:#FFDDDF}
+
+  /* chrome */
+  header{background:var(--brand);color:#fff;padding:12px 18px;
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0;font-weight:600;flex:1;min-width:150px}
+  header select{padding:7px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.25);
+    background:rgba(0,0,0,.22);color:#fff;font-size:14px;max-width:230px}
+  header .btn{background:rgba(255,255,255,.14);border:0;color:#fff;padding:7px 12px;font-size:14px}
+  nav{background:var(--brand-deep);display:flex;gap:2px;padding:0 12px;overflow-x:auto}
+  nav button{background:none;border:0;color:rgba(255,255,255,.72);padding:12px 14px;
+    font-size:14px;font-weight:500;cursor:pointer;white-space:nowrap;
+    border-bottom:3px solid transparent}
+  nav button[aria-current="true"]{color:#fff;border-bottom-color:#fff;font-weight:650}
+  main{padding:18px;max-width:1000px;margin:0 auto}
+  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:60;
+    background:#12161C;color:#fff;padding:11px 18px;border-radius:10px;font-size:14px;
+    box-shadow:0 6px 24px rgba(0,0,0,.25)}
+
+  /* content */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:13px;
+    padding:16px;margin-bottom:14px}
+  .card h2{margin:0 0 3px;font-size:16px}
+  .card .hint{margin:0 0 14px;color:var(--muted);font-size:13.5px}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:13px}
+  .row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--muted);padding:8px 9px;border-bottom:2px solid var(--line)}
+  td{padding:9px;border-bottom:1px solid var(--line);vertical-align:middle}
+  tr:last-child td{border-bottom:0}
+  .pill{display:inline-block;font-size:11.5px;font-weight:650;padding:3px 8px;border-radius:5px}
+  .pill.pending{background:#FFF3D4;color:var(--amber)}
+  .pill.active{background:#EAF4EC;color:var(--green)}
+  .pill.suspended{background:#FDECEC;color:var(--red)}
+  .pill.admin{background:#EAF0F9;color:#28456F}
+  .small{font-size:13px;color:var(--muted)}
+  .warn{background:#FFF8E6;border:1px solid #E8CE86;color:#6B520C;
+    padding:10px 12px;border-radius:9px;font-size:13.5px;margin-bottom:13px}
+  .empty{text-align:center;color:var(--muted);padding:30px}
+  .switch{display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:11px 0;border-bottom:1px solid var(--line)}
+  .switch:last-child{border-bottom:0}
+  .switch b{font-weight:600;font-size:14.5px}
+  .toggle{width:48px;height:27px;border-radius:99px;border:0;background:#CBD2DD;
+    position:relative;cursor:pointer;flex:none}
+  .toggle[aria-pressed="true"]{background:var(--green)}
+  .toggle span{position:absolute;top:3px;left:3px;width:21px;height:21px;border-radius:50%;
+    background:#fff;transition:transform .16s}
+  .toggle[aria-pressed="true"] span{transform:translateX(21px)}
+  .toggle:disabled{opacity:.45;cursor:not-allowed}
+</style>
+</head>
+<body>
+
+<section id="login">
+  <div class="box">
+    <h1>Platform Admin</h1>
+    <p>Sign in to manage organizations</p>
+    <div id="loginErr" class="err hidden"></div>
+    <div class="f"><label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username"></div>
+    <div class="f"><label for="pw">Password</label>
+      <input id="pw" type="password" autocomplete="current-password"></div>
+    <button id="loginBtn" class="btn">Sign in</button>
+  </div>
+</section>
+
+<div id="app" class="hidden">
+  <header>
+    <h1>Admin</h1>
+    <select id="orgPick"></select>
+    <button id="newOrgBtn" class="btn hidden">New organization</button>
+    <button id="signout" class="btn">Sign out</button>
+  </header>
+  <nav>
+    <button data-tab="members"   aria-current="true">Members</button>
+    <button data-tab="hospitals">Hospitals</button>
+    <button data-tab="settings">Organization</button>
+    <button data-tab="features">Features</button>
+  </nav>
+  <main>
+    <div id="tab-members"></div>
+    <div id="tab-hospitals" class="hidden"></div>
+    <div id="tab-settings" class="hidden"></div>
+    <div id="tab-features" class="hidden"></div>
+  </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  var SUPABASE_URL = "https://fwjxskdgzzfgqhnabrpa.supabase.co";
+  var SUPABASE_KEY = "sb_publishable_vbsCkIpZsk7bh-PjbhIYSw__t9MtXJi";
+
+  var db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  var $  = function(id){ return document.getElementById(id); };
+
+  var isSuper = false, orgs = [], orgId = null, org = null, tab = "members";
+
+  function esc(s){
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+  function toast(msg){
+    var t = document.createElement("div");
+    t.className = "toast"; t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(function(){ t.remove(); }, 2600);
+  }
+  function oops(e){ toast(e && e.message ? e.message : "Something went wrong"); }
+
+  /* ---------------- sign in ---------------- */
+  $("loginBtn").addEventListener("click", function(){
+    var b = $("loginBtn");
+    $("loginErr").classList.add("hidden");
+    b.disabled = true; b.textContent = "Signing in\u2026";
+    db.auth.signInWithPassword({ email: $("email").value.trim(), password: $("pw").value })
+      .then(function(r){
+        b.disabled = false; b.textContent = "Sign in";
+        if(r.error){ $("loginErr").textContent = r.error.message;
+                     $("loginErr").classList.remove("hidden"); return; }
+        boot();
+      }).catch(function(){
+        b.disabled = false; b.textContent = "Sign in";
+        $("loginErr").textContent = "Could not reach the server.";
+        $("loginErr").classList.remove("hidden");
+      });
+  });
+  $("pw").addEventListener("keydown", function(e){ if(e.key==="Enter") $("loginBtn").click(); });
+  $("signout").addEventListener("click", function(){
+    db.auth.signOut().then(function(){ location.reload(); });
+  });
+
+  /* ---------------- boot ---------------- */
+  function boot(){
+    $("login").classList.add("hidden");
+    $("app").classList.remove("hidden");
+
+    db.auth.getUser().then(function(u){
+      var uid = u && u.data && u.data.user ? u.data.user.id : null;
+      return db.from("profiles").select("is_super_admin").eq("id", uid).maybeSingle();
+    }).then(function(r){
+      isSuper = !!(r.data && r.data.is_super_admin);
+      $("newOrgBtn").classList.toggle("hidden", !isSuper);
+      return db.from("orgs").select("*").order("name");
+    }).then(function(r){
+      orgs = r.data || [];
+      if(!orgs.length){
+        $("tab-members").innerHTML = '<div class="card"><div class="empty">'
+          + 'You are not an administrator of any organization.</div></div>';
+        return;
+      }
+      $("orgPick").innerHTML = orgs.map(function(o){
+        return '<option value="'+o.id+'">'+esc(o.name)+' ('+esc(o.code)+')</option>';
+      }).join("");
+      selectOrg(orgs[0].id);
+    }).catch(oops);
+  }
+
+  function selectOrg(id){
+    orgId = id;
+    for(var i=0;i<orgs.length;i++){ if(orgs[i].id === id) org = orgs[i]; }
+    $("orgPick").value = id;
+    render();
+  }
+  $("orgPick").addEventListener("change", function(){ selectOrg($("orgPick").value); });
+
+  Array.prototype.forEach.call(document.querySelectorAll("nav button"), function(b){
+    b.addEventListener("click", function(){
+      tab = b.getAttribute("data-tab");
+      Array.prototype.forEach.call(document.querySelectorAll("nav button"), function(x){
+        x.setAttribute("aria-current", x === b ? "true" : "false");
+      });
+      ["members","hospitals","settings","features"].forEach(function(t){
+        $("tab-"+t).classList.toggle("hidden", t !== tab);
+      });
+      render();
+    });
+  });
+
+  function render(){
+    if(!org) return;
+    if(tab === "members")   renderMembers();
+    if(tab === "hospitals") renderHospitals();
+    if(tab === "settings")  renderSettings();
+    if(tab === "features")  renderFeatures();
+  }
+
+  /* ================= MEMBERS ================= */
+  function renderMembers(){
+    var el = $("tab-members");
+    el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
+
+    Promise.all([
+      db.from("memberships")
+        .select("id,user_id,role,status,unit_number,display_name,cert_level,duty_status")
+        .eq("org_id", orgId),
+      db.from("profiles").select("id,full_name,email,phone")
+    ]).then(function(r){
+      if(r[0].error) throw r[0].error;
+      var people = {};
+      (r[1].data||[]).forEach(function(p){ people[p.id] = p; });
+
+      var rows = (r[0].data||[]).map(function(m){
+        m.person = people[m.user_id] || {};
+        return m;
+      });
+      rows.sort(function(a,b){
+        var rank = {pending:0, active:1, suspended:2, removed:3};
+        if(rank[a.status] !== rank[b.status]) return rank[a.status] - rank[b.status];
+        return (a.unit_number||"").localeCompare(b.unit_number||"");
+      });
+
+      var pending = rows.filter(function(m){ return m.status === "pending"; });
+
+      var html = "";
+      if(pending.length){
+        html += '<div class="warn"><b>'+pending.length+' waiting for approval.</b> '
+             +  'They signed up with an organization email but cannot see anything yet.</div>';
+      }
+
+      html += '<div class="card"><h2>Members</h2>'
+           +  '<p class="hint">'+rows.length+' on the roster. '
+           +  'Approve new sign-ups, set roles, or suspend access here.</p>';
+
+      if(!rows.length){
+        html += '<div class="empty">Nobody has signed up yet.</div></div>';
+        el.innerHTML = html; return;
+      }
+
+      html += '<div style="overflow-x:auto"><table><thead><tr>'
+           +  '<th>Name</th><th>Unit</th><th>Role</th><th>Status</th><th></th>'
+           +  '</tr></thead><tbody>';
+
+      rows.forEach(function(m){
+        var name = m.display_name || m.person.full_name || m.person.email || "\u2014";
+        html += '<tr>'
+          + '<td><b>'+esc(name)+'</b><div class="small">'+esc(m.person.email||"")+'</div></td>'
+          + '<td>'+esc(m.unit_number||"\u2014")+'</td>'
+          + '<td><select class="js-role" data-id="'+m.id+'">'
+          +   ["member","dispatcher","admin","guest"].map(function(rr){
+                return '<option value="'+rr+'"'+(m.role===rr?" selected":"")+'>'+rr+'</option>';
+              }).join("")
+          + '</select></td>'
+          + '<td><span class="pill '+esc(m.status)+'">'+esc(m.status)+'</span></td>'
+          + '<td class="row">'
+          +   (m.status === "pending"
+                ? '<button class="btn ok js-approve" data-id="'+m.id+'">Approve</button>' : '')
+          +   (m.status === "active"
+                ? '<button class="btn danger js-suspend" data-id="'+m.id+'">Suspend</button>' : '')
+          +   (m.status === "suspended"
+                ? '<button class="btn ok js-approve" data-id="'+m.id+'">Reinstate</button>' : '')
+          + '</td></tr>';
+      });
+
+      html += '</tbody></table></div></div>';
+      el.innerHTML = html;
+    }).catch(function(e){
+      el.innerHTML = '<div class="card"><div class="err">'+esc(e.message||"Could not load members")+'</div></div>';
+    });
+  }
+
+  /* ================= HOSPITALS ================= */
+  function renderHospitals(){
+    var el = $("tab-hospitals");
+    el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
+
+    db.from("hospitals").select("*").eq("org_id", orgId).order("sort_order")
+      .then(function(r){
+        if(r.error) throw r.error;
+        var rows = r.data || [];
+        var gaps = rows.filter(function(h){ return !h.phone_call || !h.address; }).length;
+
+        var html = '<div class="card"><h2>Add a hospital</h2>'
+          + '<p class="hint">Only the name is required. Everything else can be filled in later.</p>'
+          + '<div class="grid2">'
+          + '<div class="f"><label>Name</label><input id="nh_name"></div>'
+          + '<div class="f"><label>Phone</label><input id="nh_phone"></div>'
+          + '<div class="f"><label>Red phone</label><input id="nh_red"></div>'
+          + '<div class="f"><label>Door code</label><input id="nh_door"></div>'
+          + '<div class="f" style="grid-column:1/-1"><label>Address</label><input id="nh_addr"></div>'
+          + '</div><button id="nh_add" class="btn primary">Add hospital</button></div>';
+
+        html += '<div class="card"><h2>'+rows.length+' hospitals</h2>';
+        if(gaps){
+          html += '<p class="hint">'+gaps+' are missing a phone number or an address. '
+               +  'Members will see "not on file" for those.</p>';
+        }
+
+        if(!rows.length){
+          html += '<div class="empty">No hospitals yet.</div></div>';
+          el.innerHTML = html; wireHospitalForm(); return;
+        }
+
+        html += '<div style="overflow-x:auto"><table><thead><tr>'
+             +  '<th>Name</th><th>Phone</th><th>Door</th><th>Address</th><th></th>'
+             +  '</tr></thead><tbody>';
+        rows.forEach(function(h){
+          html += '<tr>'
+            + '<td><input class="js-h" data-id="'+h.id+'" data-f="name" value="'+esc(h.name)+'"></td>'
+            + '<td><input class="js-h" data-id="'+h.id+'" data-f="phone_call" value="'+esc(h.phone_call||"")+'" placeholder="\u2014"></td>'
+            + '<td><input class="js-h" data-id="'+h.id+'" data-f="door_code" value="'+esc(h.door_code||"")+'" placeholder="\u2014" style="width:90px"></td>'
+            + '<td><input class="js-h" data-id="'+h.id+'" data-f="address" value="'+esc(h.address||"")+'" placeholder="\u2014"></td>'
+            + '<td><button class="btn danger js-hdel" data-id="'+h.id+'" data-name="'+esc(h.name)+'">Delete</button></td>'
+            + '</tr>';
+        });
+        html += '</tbody></table></div>'
+             +  '<p class="hint" style="margin-top:12px">Edits save when you click out of a box.</p></div>';
+        el.innerHTML = html;
+        wireHospitalForm();
+      }).catch(function(e){
+        el.innerHTML = '<div class="card"><div class="err">'+esc(e.message||"Could not load hospitals")+'</div></div>';
+      });
+  }
+
+  function wireHospitalForm(){
+    var add = $("nh_add");
+    if(add) add.addEventListener("click", function(){
+      var name = $("nh_name").value.trim();
+      if(!name){ toast("A hospital needs a name."); return; }
+      add.disabled = true;
+      db.from("hospitals").insert({
+        org_id: orgId, name: name,
+        phone_call: $("nh_phone").value.trim() || null,
+        phone_red:  $("nh_red").value.trim()   || null,
+        door_code:  $("nh_door").value.trim()  || null,
+        address:    $("nh_addr").value.trim()  || null,
+        sort_order: 9999
+      }).then(function(r){
+        add.disabled = false;
+        if(r.error) return oops(r.error);
+        toast("Added " + name); renderHospitals();
+      }).catch(function(e){ add.disabled = false; oops(e); });
+    });
+  }
+
+  /* ================= ORGANIZATION ================= */
+  function renderSettings(){
+    var o = org;
+    $("tab-settings").innerHTML =
+      '<div class="card"><h2>Organization code</h2>'
+      + '<p class="hint">What members type to reach this organization\u2019s login page.</p>'
+      + '<div class="warn">Changing this keeps the old code working, so saved links and '
+      + 'printed cards will not break.</div>'
+      + '<div class="grid2">'
+      +   '<div class="f"><label>Code</label><input id="s_code" value="'+esc(o.code)+'"></div>'
+      +   '<div class="f"><label>Organization name</label><input id="s_name" value="'+esc(o.name)+'"></div>'
+      + '</div></div>'
+
+      + '<div class="card"><h2>Appearance</h2>'
+      + '<p class="hint">Shown on this organization\u2019s login page and home screen icon.</p>'
+      + '<div class="grid2">'
+      +   '<div class="f"><label>Home screen name (keep it short)</label>'
+      +     '<input id="s_appname" value="'+esc(o.app_name||"")+'"></div>'
+      +   '<div class="f"><label>Brand colour</label>'
+      +     '<input id="s_brand" type="color" value="'+esc(o.brand_primary||"#143D75")+'" style="height:44px"></div>'
+      +   '<div class="f" style="grid-column:1/-1"><label>Login page subtitle</label>'
+      +     '<input id="s_sub" value="'+esc(o.login_subtext||"")+'"></div>'
+      + '</div></div>'
+
+      + '<div class="card"><h2>Phone numbers</h2>'
+      + '<div class="grid2">'
+      +   '<div class="f"><label>Dispatch</label><input id="s_dispatch" value="'+esc(o.dispatch_phone||"")+'"></div>'
+      +   '<div class="f"><label>Medical control</label><input id="s_medcon" value="'+esc(o.medical_control_phone||"")+'"></div>'
+      + '</div></div>'
+
+      + '<div class="card"><h2>Who can sign in</h2>'
+      + '<div class="grid2">'
+      +   '<div class="f"><label>Email domain</label>'
+      +     '<input id="s_domain" value="'+esc((o.email_domains||[])[0]||"")+'" placeholder="houstonhatzalah.org"></div>'
+      +   '<div class="f"><label>Sign-up rule</label><select id="s_auth">'
+      +     ['domain_pending','domain_open','invite_only'].map(function(m){
+            var label = { domain_pending:"Org email, admin approves",
+                          domain_open:"Org email, straight in",
+                          invite_only:"Admin adds everyone by hand" }[m];
+            return '<option value="'+m+'"'+(o.auth_mode===m?" selected":"")+'>'+label+'</option>';
+          }).join("")
+      +   '</select></div>'
+      + '</div></div>'
+
+      + '<div class="card"><h2>Directory privacy</h2>'
+      + '<p class="hint">Members always see their own details. These decide what they see about '
+      + 'everyone else. Administrators always see everything.</p>'
+      + '<div class="switch"><b>Show dates of birth to all members</b>'
+      +   '<button class="toggle js-orgtog" data-f="directory_shows_dob" aria-pressed="'
+      +   (o.directory_shows_dob?"true":"false")+'"><span></span></button></div>'
+      + '<div class="switch"><b>Show home addresses to all members</b>'
+      +   '<button class="toggle js-orgtog" data-f="directory_shows_address" aria-pressed="'
+      +   (o.directory_shows_address?"true":"false")+'"><span></span></button></div>'
+      + '</div>'
+
+      + '<button id="s_save" class="btn primary">Save changes</button>';
+
+    $("s_save").addEventListener("click", saveSettings);
+  }
+
+  function saveSettings(){
+    var b = $("s_save"); b.disabled = true;
+    var code = $("s_code").value.trim().toLowerCase();
+    if(!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(code)){
+      b.disabled = false;
+      toast("Code must be lowercase letters, numbers and dashes only.");
+      return;
+    }
+    var dom = $("s_domain").value.trim().toLowerCase().replace(/^@/,"");
+    db.from("orgs").update({
+      code: code,
+      name: $("s_name").value.trim(),
+      app_name: $("s_appname").value.trim() || null,
+      brand_primary: $("s_brand").value,
+      login_subtext: $("s_sub").value.trim() || null,
+      dispatch_phone: $("s_dispatch").value.trim() || null,
+      medical_control_phone: $("s_medcon").value.trim() || null,
+      email_domains: dom ? [dom] : [],
+      auth_mode: $("s_auth").value
+    }).eq("id", orgId).select().then(function(r){
+      b.disabled = false;
+      if(r.error) return oops(r.error);
+      if(r.data && r.data[0]){
+        for(var i=0;i<orgs.length;i++){ if(orgs[i].id===orgId) orgs[i]=r.data[0]; }
+        org = r.data[0];
+      }
+      $("orgPick").innerHTML = orgs.map(function(o){
+        return '<option value="'+o.id+'">'+esc(o.name)+' ('+esc(o.code)+')</option>';
+      }).join("");
+      $("orgPick").value = orgId;
+      toast("Saved");
+    }).catch(function(e){ b.disabled = false; oops(e); });
+  }
+
+  /* ================= FEATURES ================= */
+  function renderFeatures(){
+    var el = $("tab-features");
+    el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
+
+    Promise.all([
+      db.from("features").select("key,name,description,category,is_billable").order("sort_order"),
+      db.from("v_org_features").select("feature_key,enabled,overridden").eq("org_id", orgId)
+    ]).then(function(r){
+      if(r[0].error) throw r[0].error;
+      var state = {};
+      (r[1].data||[]).forEach(function(f){ state[f.feature_key] = f.enabled; });
+
+      var html = '<div class="card"><h2>Features</h2>'
+        + '<p class="hint">Switching one off hides its tile for everyone in this organization.</p>'
+        + (isSuper ? '' : '<div class="warn">Only the platform owner can change these. '
+                        + 'Contact them to add a feature to your plan.</div>');
+
+      (r[0].data||[]).forEach(function(f){
+        html += '<div class="switch"><span><b>'+esc(f.name)+'</b>'
+             +  '<div class="small">'+esc(f.description||"")+'</div></span>'
+             +  '<button class="toggle js-feat" data-k="'+esc(f.key)+'" aria-pressed="'
+             +  (state[f.key]?"true":"false")+'"'+(isSuper?"":" disabled")+'><span></span></button></div>';
+      });
+      html += '</div>';
+      el.innerHTML = html;
+    }).catch(function(e){
+      el.innerHTML = '<div class="card"><div class="err">'+esc(e.message||"Could not load features")+'</div></div>';
+    });
+  }
+
+  /* ================= one click handler ================= */
+  document.addEventListener("click", function(e){
+    var t = e.target;
+    if(!t || !t.closest) return;
+
+    var ap = t.closest(".js-approve");
+    if(ap){
+      db.from("memberships").update({status:"active"}).eq("id", ap.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error); toast("Approved"); renderMembers(); });
+      return;
+    }
+    var su = t.closest(".js-suspend");
+    if(su){
+      if(!confirm("Suspend this member? They lose access immediately and all their devices are signed out.")) return;
+      db.from("memberships").update({status:"suspended"}).eq("id", su.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error); toast("Suspended"); renderMembers(); });
+      return;
+    }
+    var hd = t.closest(".js-hdel");
+    if(hd){
+      if(!confirm("Delete " + hd.getAttribute("data-name") + "? This cannot be undone.")) return;
+      db.from("hospitals").delete().eq("id", hd.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error); toast("Deleted"); renderHospitals(); });
+      return;
+    }
+    var ot = t.closest(".js-orgtog");
+    if(ot){
+      var on = ot.getAttribute("aria-pressed") !== "true";
+      var patch = {}; patch[ot.getAttribute("data-f")] = on;
+      db.from("orgs").update(patch).eq("id", orgId).then(function(r){
+        if(r.error) return oops(r.error);
+        ot.setAttribute("aria-pressed", on ? "true" : "false");
+        org[ot.getAttribute("data-f")] = on;
+        toast("Saved");
+      });
+      return;
+    }
+    var ft = t.closest(".js-feat");
+    if(ft && !ft.disabled){
+      var want = ft.getAttribute("aria-pressed") !== "true";
+      db.from("org_features")
+        .upsert({org_id:orgId, feature_key:ft.getAttribute("data-k"), enabled:want},
+                {onConflict:"org_id,feature_key"})
+        .then(function(r){
+          if(r.error) return oops(r.error);
+          ft.setAttribute("aria-pressed", want ? "true" : "false");
+          toast(want ? "Switched on" : "Switched off");
+        });
+      return;
+    }
+  });
+
+  /* inline edits save on blur */
+  document.addEventListener("blur", function(e){
+    var i = e.target;
+    if(!i.classList || !i.classList.contains("js-h")) return;
+    var patch = {}; patch[i.getAttribute("data-f")] = i.value.trim() || null;
+    db.from("hospitals").update(patch).eq("id", i.getAttribute("data-id"))
+      .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
+  }, true);
+
+  document.addEventListener("change", function(e){
+    var s = e.target;
+    if(!s.classList || !s.classList.contains("js-role")) return;
+    db.from("memberships").update({role:s.value}).eq("id", s.getAttribute("data-id"))
+      .then(function(r){ if(r.error) return oops(r.error); toast("Role updated"); });
+  });
+
+  /* ================= new organization ================= */
+  $("newOrgBtn").addEventListener("click", function(){
+    var name = prompt("Organization name (e.g. Hatzalah of Lakewood)");
+    if(!name) return;
+    var code = prompt("Short code members will type (lowercase, e.g. lakewood)");
+    if(!code) return;
+    var email = prompt("Email address of the person who will run it");
+    if(!email) return;
+    var domain = prompt("Their email domain, or leave blank (e.g. hatzalahlakewood.org)") || null;
+
+    db.rpc("new_org", {
+      p_code: code.trim().toLowerCase(), p_name: name.trim(),
+      p_contact_email: email.trim().toLowerCase(), p_domain: domain ? domain.trim().toLowerCase() : null
+    }).then(function(r){
+      if(r.error) return oops(r.error);
+      toast("Created " + name);
+      boot();
+    }).catch(oops);
+  });
+
+  db.auth.getSession().then(function(r){
+    if(r && r.data && r.data.session) boot();
+  }).catch(function(){});
+})();
+</script>
+</body>
+</html>
