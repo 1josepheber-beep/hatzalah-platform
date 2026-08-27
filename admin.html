@@ -97,6 +97,16 @@
   .warn{background:#FFF8E6;border:1px solid #E8CE86;color:#6B520C;
     padding:10px 12px;border-radius:9px;font-size:13.5px;margin-bottom:13px}
   .empty{text-align:center;color:var(--muted);padding:30px}
+  .binwrap{position:relative;display:inline-block;max-width:100%;border:1px solid var(--line);
+    border-radius:10px;overflow:hidden;cursor:crosshair;user-select:none}
+  .binwrap img{display:block;max-width:100%;height:auto;pointer-events:none}
+  #binlayer{position:absolute;inset:0}
+  .binbox{position:absolute;border:2px solid var(--brand);background:rgba(20,61,117,.16);
+    border-radius:4px;cursor:pointer;display:flex;align-items:flex-end;overflow:hidden}
+  .binbox span{font-size:10px;font-weight:700;background:var(--brand);color:#fff;
+    padding:1px 4px;border-radius:0 4px 0 0;white-space:nowrap}
+  .binbox.ghost{border-style:dashed;background:rgba(20,61,117,.08);pointer-events:none}
+  .binbox:hover{background:rgba(20,61,117,.3)}
   .brandgrid{display:grid;grid-template-columns:1fr 300px;gap:22px}
   @media (max-width:920px){ .brandgrid{grid-template-columns:1fr} }
   .phone{border:1px solid var(--line);border-radius:20px;overflow:hidden;background:#fff;
@@ -218,6 +228,7 @@
     <button data-tab="hospitals">Hospitals</button>
     <button data-tab="protocols">Protocols</button>
     <button data-tab="tiles">Home screen</button>
+    <button data-tab="equipment">Equipment</button>
     <button data-tab="content">Content</button>
     <button data-tab="media">Images</button>
     <button data-tab="settings">Organization</button>
@@ -228,6 +239,7 @@
     <div id="tab-hospitals" class="hidden"></div>
     <div id="tab-protocols" class="hidden"></div>
     <div id="tab-tiles" class="hidden"></div>
+    <div id="tab-equipment" class="hidden"></div>
     <div id="tab-content" class="hidden"></div>
     <div id="tab-media" class="hidden"></div>
     <div id="tab-settings" class="hidden"></div>
@@ -316,7 +328,7 @@
   window.addEventListener("beforeunload", function(e){
     if(pendingCount()){ e.preventDefault(); e.returnValue = ""; }
   });
-  var TABS = ["members","hospitals","protocols","tiles","content","media","settings","features"];
+  var TABS = ["members","hospitals","protocols","tiles","equipment","content","media","settings","features"];
 
   /* Remember where you were. Refreshing in the middle of data entry and
      landing back on the first tab is maddening. */
@@ -453,6 +465,7 @@
     if(tab === "hospitals") renderHospitals();
     if(tab === "protocols") renderProtocols();
     if(tab === "tiles") renderTiles();
+    if(tab === "equipment") renderEquipment();
     if(tab === "content") renderContent();
     if(tab === "media") renderMedia();
     if(tab === "settings")  renderSettings();
@@ -2842,6 +2855,380 @@
       });
   }
 
+  /* ================= EQUIPMENT =================
+     Two things live here. The cabinets, where a bin is a box drawn on a
+     photo of the real cabinet - so it is drawn, not typed. And the minimum
+     equipment list, which is a straight table.
+
+     Both were only editable inside the member app before, which meant a
+     new organization had no way to set up their own. */
+
+  var EQUIP_SUB = "cabinets", CAB_ID = null, CAB_ITEMS = [], CAB_ROW = null;
+
+  function renderEquipment(){
+    var el = $("tab-equipment");
+    el.innerHTML = '<div class="card" style="padding:10px 14px"><div class="row">'
+      + [["cabinets","Cabinets and bins"],["checklist","Minimum equipment list"]]
+          .map(function(t){
+            return '<button class="btn js-esub'+(EQUIP_SUB===t[0]?" primary":"")+'" '
+              + 'data-s="'+t[0]+'">'+esc(t[1])+'</button>';
+          }).join("")
+      + '</div></div><div id="equip_body"></div>';
+
+    Array.prototype.forEach.call(el.querySelectorAll(".js-esub"), function(b){
+      b.addEventListener("click", function(){
+        EQUIP_SUB = b.getAttribute("data-s"); renderEquipment();
+      });
+    });
+
+    if(EQUIP_SUB === "cabinets")  renderCabinets();
+    if(EQUIP_SUB === "checklist") renderChecklist();
+  }
+
+  /* ---------- cabinets ---------- */
+  function renderCabinets(){
+    var el = $("equip_body");
+    el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
+
+    db.from("cabinets").select("*").eq("org_id", orgId).order("sort_order")
+      .then(function(r){
+        if(r.error) throw r.error;
+        var cabs = r.data || [];
+        if(!CAB_ID && cabs.length) CAB_ID = cabs[0].id;
+        CAB_ROW = null;
+        cabs.forEach(function(c){ if(c.id === CAB_ID) CAB_ROW = c; });
+
+        var html = '<div class="card"><h2>Cabinets</h2>'
+          + '<p class="hint">A photo of each cabinet, with a box drawn over every bin. '
+          + 'Responders tap a box to find what is in it.</p>'
+          + '<div class="row" style="margin-bottom:12px">'
+          +   cabs.map(function(c){
+                return '<button class="btn js-cab'+(c.id===CAB_ID?" primary":"")+'" '
+                  + 'data-id="'+c.id+'">'+esc(c.name)+'</button>';
+              }).join("")
+          +   '<button id="cab_new" class="btn">Add a cabinet</button>'
+          + '</div>';
+
+        if(!cabs.length){
+          html += '<div class="empty">No cabinets yet. Add one, then upload a photo of it.</div>'
+               +  '</div>';
+          el.innerHTML = html; wireCabinets([]); return;
+        }
+
+        html += '<div class="grid2">'
+          + '<div class="f"><label>Name</label>'
+          +   '<input id="cab_name" value="'+esc(CAB_ROW.name||"")+'"></div>'
+          + '<div class="f"><label>Photo</label><div class="row">'
+          +   '<label class="btn" style="cursor:pointer">Choose a photo'
+          +     '<input type="file" id="cab_photo" accept="image/*" style="display:none"></label>'
+          +   '<button id="cab_del" class="btn danger">Delete this cabinet</button>'
+          + '</div></div></div></div>';
+
+        html += '<div class="card"><h2>Bins in '+esc(CAB_ROW.name||"this cabinet")+'</h2>';
+
+        if(!CAB_ROW.photo_path){
+          html += '<div class="warn">Upload a photo of this cabinet first. The bins are drawn '
+               +  'on top of it.</div></div>';
+          el.innerHTML = html; wireCabinets(cabs); return;
+        }
+
+        html += '<p class="hint">Drag a rectangle over a bin to add it. Click a box to rename it '
+             +  'or remove it. Positions are stored as fractions, so they hold on any screen.</p>'
+             +  '<div class="binwrap" id="binwrap">'
+             +    '<img id="binimg" src="'+esc(CAB_ROW.photo_path)+'" alt="">'
+             +    '<div id="binlayer"></div>'
+             +  '</div>'
+             +  '<div id="binedit"></div>'
+             +  '<div id="binlist" style="margin-top:14px"></div></div>';
+
+        el.innerHTML = html;
+        wireCabinets(cabs);
+        loadBins();
+      }).catch(function(e){
+        el.innerHTML = '<div class="card"><div class="err">'
+          + esc(e.message||"Could not load cabinets") + '</div></div>';
+      });
+  }
+
+  function wireCabinets(cabs){
+    Array.prototype.forEach.call(document.querySelectorAll(".js-cab"), function(b){
+      b.addEventListener("click", function(){
+        CAB_ID = b.getAttribute("data-id"); renderCabinets();
+      });
+    });
+
+    var nb = $("cab_new");
+    if(nb) nb.addEventListener("click", function(){
+      var name = prompt("What is this cabinet called?", "New cabinet");
+      if(!name) return;
+      db.from("cabinets").insert({ org_id:orgId, name:name.trim(),
+                                   sort_order:(cabs.length+1)*10 })
+        .select().single().then(function(r){
+          if(r.error) return oops(r.error);
+          CAB_ID = r.data.id; toast("Added"); renderCabinets();
+        }).catch(oops);
+    });
+
+    var nm = $("cab_name");
+    if(nm) nm.addEventListener("blur", function(){
+      db.from("cabinets").update({ name:nm.value.trim() }).eq("id", CAB_ID)
+        .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
+    });
+
+    var dl = $("cab_del");
+    if(dl) dl.addEventListener("click", function(){
+      if(!confirm("Delete this cabinet and every bin on it?")) return;
+      db.from("cabinets").delete().eq("id", CAB_ID).then(function(r){
+        if(r.error) return oops(r.error);
+        CAB_ID = null; toast("Deleted"); renderCabinets();
+      }).catch(oops);
+    });
+
+    var ph = $("cab_photo");
+    if(ph) ph.addEventListener("change", function(e){
+      var f = e.target.files && e.target.files[0];
+      if(!f) return;
+      if(f.size > 8 * 1024 * 1024){ toast("Keep the photo under 8 MB."); return; }
+      var path = orgId + "/cabinets/" + CAB_ID + "-" + Date.now().toString(36) + "-"
+               + f.name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+      toast("Uploading\u2026");
+      db.storage.from("org-branding").upload(path, f, { upsert:true, contentType:f.type })
+        .then(function(r){
+          if(r.error) throw r.error;
+          var url = db.storage.from("org-branding").getPublicUrl(path).data.publicUrl;
+          return db.from("cabinets").update({ photo_path:url }).eq("id", CAB_ID);
+        })
+        .then(function(r){
+          if(r.error) throw r.error;
+          toast("Photo saved"); renderCabinets();
+        }).catch(oops);
+    });
+  }
+
+  /* ---------- the bins drawn on the photo ---------- */
+  function loadBins(){
+    db.from("cabinet_items").select("*").eq("cabinet_id", CAB_ID)
+      .then(function(r){
+        if(r.error) return oops(r.error);
+        CAB_ITEMS = r.data || [];
+        paintBins();
+        wireBinDrawing();
+      });
+  }
+
+  function paintBins(){
+    var layer = $("binlayer");
+    if(!layer) return;
+    layer.innerHTML = CAB_ITEMS.map(function(b, i){
+      return '<div class="binbox js-bin" data-i="'+i+'" style="left:'+(b.x*100)+'%;top:'
+        + (b.y*100)+'%;width:'+(b.w*100)+'%;height:'+(b.h*100)+'%">'
+        + '<span>'+esc(b.name||"")+'</span></div>';
+    }).join("");
+
+    Array.prototype.forEach.call(layer.querySelectorAll(".js-bin"), function(el){
+      el.addEventListener("click", function(ev){
+        ev.stopPropagation();
+        editBin(parseInt(el.getAttribute("data-i"), 10));
+      });
+    });
+
+    var list = $("binlist");
+    if(list){
+      list.innerHTML = '<p class="hint">'+CAB_ITEMS.length+' bins on this cabinet.</p>'
+        + (CAB_ITEMS.length
+            ? '<div class="scroller narrow"><table><thead><tr><th>Bin</th>'
+              + '<th style="width:130px">How many</th><th style="width:70px"></th>'
+              + '</tr></thead><tbody>'
+              + CAB_ITEMS.map(function(b, i){
+                  return '<tr><td><input class="js-binf" data-i="'+i+'" data-f="name" '
+                    + 'value="'+esc(b.name||"")+'"></td>'
+                    + '<td><input class="js-binf" data-i="'+i+'" data-f="quantity_text" '
+                    + 'value="'+esc(b.quantity_text||"")+'"></td>'
+                    + '<td class="actions"><button class="xbtn js-bindel" data-i="'+i+'"'
+                    + ' title="Remove">\u00D7</button></td></tr>';
+                }).join("")
+              + '</tbody></table></div>'
+            : '');
+
+      Array.prototype.forEach.call(list.querySelectorAll(".js-binf"), function(inp){
+        inp.addEventListener("blur", function(){
+          var b = CAB_ITEMS[parseInt(inp.getAttribute("data-i"), 10)];
+          var patch = {}; patch[inp.getAttribute("data-f")] = inp.value.trim() || null;
+          db.from("cabinet_items").update(patch).eq("id", b.id)
+            .then(function(r){ if(r.error) oops(r.error); else { toast("Saved"); loadBins(); } });
+        });
+      });
+      Array.prototype.forEach.call(list.querySelectorAll(".js-bindel"), function(btn){
+        btn.addEventListener("click", function(){
+          var b = CAB_ITEMS[parseInt(btn.getAttribute("data-i"), 10)];
+          if(!confirm("Remove " + (b.name || "this bin") + "?")) return;
+          db.from("cabinet_items").delete().eq("id", b.id)
+            .then(function(r){ if(r.error) return oops(r.error); toast("Removed"); loadBins(); });
+        });
+      });
+    }
+  }
+
+  function editBin(i){
+    var b = CAB_ITEMS[i];
+    var box = $("binedit");
+    box.innerHTML = '<div class="card" style="margin-top:12px"><h2>'
+      + esc(b.name || "This bin") + '</h2>'
+      + '<div class="grid2">'
+      +   '<div class="f"><label>What is in it</label>'
+      +     '<input id="be_name" value="'+esc(b.name||"")+'"></div>'
+      +   '<div class="f"><label>How many</label>'
+      +     '<input id="be_qty" value="'+esc(b.quantity_text||"")+'" placeholder="2"></div>'
+      + '</div>'
+      + '<div class="row"><button id="be_save" class="btn primary">Save</button>'
+      +   '<button id="be_del" class="btn danger">Remove this bin</button>'
+      +   '<button id="be_close" class="btn">Close</button></div></div>';
+
+    $("be_save").addEventListener("click", function(){
+      db.from("cabinet_items").update({
+        name: $("be_name").value.trim() || null,
+        quantity_text: $("be_qty").value.trim() || null
+      }).eq("id", b.id).then(function(r){
+        if(r.error) return oops(r.error);
+        box.innerHTML = ""; toast("Saved"); loadBins();
+      }).catch(oops);
+    });
+    $("be_del").addEventListener("click", function(){
+      if(!confirm("Remove this bin?")) return;
+      db.from("cabinet_items").delete().eq("id", b.id).then(function(r){
+        if(r.error) return oops(r.error);
+        box.innerHTML = ""; toast("Removed"); loadBins();
+      }).catch(oops);
+    });
+    $("be_close").addEventListener("click", function(){ box.innerHTML = ""; });
+  }
+
+  /* drag a rectangle over the photo to make a new bin */
+  function wireBinDrawing(){
+    var wrap = $("binwrap"), layer = $("binlayer");
+    if(!wrap || wrap.__wired) return;
+    wrap.__wired = true;
+
+    var start = null, ghost = null;
+
+    function pos(e){
+      var r = wrap.getBoundingClientRect();
+      return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+               y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) };
+    }
+
+    wrap.addEventListener("mousedown", function(e){
+      if(e.target.closest && e.target.closest(".js-bin")) return;
+      e.preventDefault();
+      start = pos(e);
+      ghost = document.createElement("div");
+      ghost.className = "binbox ghost";
+      layer.appendChild(ghost);
+    });
+
+    wrap.addEventListener("mousemove", function(e){
+      if(!start || !ghost) return;
+      var p = pos(e);
+      var x = Math.min(start.x, p.x), y = Math.min(start.y, p.y);
+      var w = Math.abs(p.x - start.x), h = Math.abs(p.y - start.y);
+      ghost.style.left = (x*100)+"%"; ghost.style.top = (y*100)+"%";
+      ghost.style.width = (w*100)+"%"; ghost.style.height = (h*100)+"%";
+    });
+
+    window.addEventListener("mouseup", function(e){
+      if(!start || !ghost) return;
+      var p = pos(e);
+      var x = Math.min(start.x, p.x), y = Math.min(start.y, p.y);
+      var w = Math.abs(p.x - start.x), h = Math.abs(p.y - start.y);
+      ghost.remove(); ghost = null; start = null;
+
+      if(w < 0.02 || h < 0.02) return;      // a stray click, not a box
+
+      var name = prompt("What is in this bin?");
+      if(!name){ return; }
+      db.from("cabinet_items").insert({
+        org_id: orgId, cabinet_id: CAB_ID, name: name.trim(),
+        x: +x.toFixed(5), y: +y.toFixed(5), w: +w.toFixed(5), h: +h.toFixed(5)
+      }).then(function(r){
+        if(r.error) return oops(r.error);
+        toast("Bin added"); loadBins();
+      }).catch(oops);
+    });
+  }
+
+  /* ---------- the minimum equipment list ---------- */
+  function renderChecklist(){
+    var el = $("equip_body");
+    el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
+
+    db.from("checklist_items").select("*").eq("org_id", orgId).order("sort_order")
+      .then(function(r){
+        if(r.error) throw r.error;
+        var rows = r.data || [];
+        var cats = [];
+        rows.forEach(function(x){ if(cats.indexOf(x.category) < 0) cats.push(x.category); });
+
+        var html = '<div class="card"><h2>Add an item</h2>'
+          + '<div class="grid2">'
+          +   '<div class="f"><label>Name</label><input id="ni_name"></div>'
+          +   '<div class="f"><label>Category</label><input id="ni_cat" list="ni_cats">'
+          +     '<datalist id="ni_cats">'
+          +       cats.map(function(c){ return '<option value="'+esc(c)+'">'; }).join("")
+          +     '</datalist></div>'
+          + '</div><button id="ni_add" class="btn primary">Add it</button></div>';
+
+        html += '<div class="card"><h2>'+rows.length+' items</h2>'
+          + '<p class="hint">What this organization must carry. Members see it as their '
+          + 'equipment checklist.</p>'
+          + dragHint()
+          + '<div class="scroller tall"><table><thead><tr>'
+          + '<th style="width:44px"></th><th>Item</th><th style="width:190px">Category</th>'
+          + '<th style="width:90px">How many</th><th style="width:90px">Level</th>'
+          + '<th style="width:80px">Source</th><th>Ours</th><th style="width:56px">On</th>'
+          + '<th></th></tr></thead><tbody id="sortRows_checklist">';
+
+        rows.forEach(function(x){
+          html += '<tr draggable="true" class="js-sortrow" data-id="'+x.id+'">'
+            + '<td class="draghandle" title="Drag to move">\u2630</td>'
+            + '<td><input class="js-ci" data-id="'+x.id+'" data-f="name" '
+            +   'value="'+esc(x.name||"")+'"></td>'
+            + '<td><input class="js-ci" data-id="'+x.id+'" data-f="category" '
+            +   'value="'+esc(x.category||"")+'"></td>'
+            + '<td><input class="js-ci" data-id="'+x.id+'" data-f="quantity" '
+            +   'value="'+esc(x.quantity==null?"":x.quantity)+'" inputmode="decimal"></td>'
+            + '<td><input class="js-ci" data-id="'+x.id+'" data-f="tiers" '
+            +   'value="'+esc((x.tiers||[]).join(","))+'" placeholder="BLS"></td>'
+            + '<td><input class="js-ci" data-id="'+x.id+'" data-f="source" '
+            +   'value="'+esc(x.source||"")+'" placeholder="S / C"></td>'
+            + '<td><input class="js-ci" data-id="'+x.id+'" data-f="our_note" '
+            +   'value="'+esc(x.our_note||"")+'"></td>'
+            + '<td style="text-align:center"><input type="checkbox" class="js-cichk" '
+            +   'data-id="'+x.id+'" data-f="is_active" '+(x.is_active?"checked":"")+'></td>'
+            + '<td class="actions"><button class="xbtn js-cidel" data-id="'+x.id+'" '
+            +   'title="Delete">\u00D7</button></td></tr>';
+        });
+        html += '</tbody></table></div></div>';
+
+        el.innerHTML = html;
+        makeSortable("sortRows_checklist", "checklist_items");
+
+        $("ni_add").addEventListener("click", function(){
+          var nm = $("ni_name").value.trim();
+          if(!nm){ toast("Give it a name."); return; }
+          db.from("checklist_items").insert({
+            org_id: orgId, name: nm, category: $("ni_cat").value.trim() || "Other",
+            tiers: ["BLS"], is_active: true, sort_order: (rows.length+1)*10
+          }).then(function(r){
+            if(r.error) return oops(r.error);
+            toast("Added " + nm); renderChecklist();
+          }).catch(oops);
+        });
+      }).catch(function(e){
+        el.innerHTML = '<div class="card"><div class="err">'
+          + esc(e.message||"Could not load the list") + '</div></div>';
+      });
+  }
+
   /* ================= CONTENT ================= */
 
   var CONTENT_SETS = {
@@ -3368,6 +3755,15 @@
       return;
     }
 
+    var cid = t.closest(".js-cidel");
+    if(cid){
+      if(!confirm("Delete this item?")) return;
+      db.from("checklist_items").delete().eq("id", cid.getAttribute("data-id"))
+        .then(function(r){ if(r.error) return oops(r.error);
+                           toast("Deleted"); renderChecklist(); });
+      return;
+    }
+
     var ctd = t.closest(".js-ctdel");
     if(ctd){
       if(!confirm("Delete " + ctd.getAttribute("data-name")
@@ -3484,6 +3880,11 @@
         }).catch(oops);
       return;
     }
+    if(el.classList && el.classList.contains("js-cichk")){
+      markEdit("checklist_items", el.getAttribute("data-id"),
+               el.getAttribute("data-f"), el.checked);
+      return;
+    }
     if(el.classList && el.classList.contains("js-ctsel")){
       markEdit("certification_types", el.getAttribute("data-id"),
                el.getAttribute("data-f"), el.value);
@@ -3524,6 +3925,17 @@
       var rp2 = {}; rp2[rf] = rv || null;
       db.from("roster_slots").update(rp2).eq("id", i.getAttribute("data-id"))
         .then(function(r){ if(r.error) oops(r.error); else toast("Saved"); });
+      return;
+    }
+    if(i.classList && i.classList.contains("js-ci")){
+      var cif = i.getAttribute("data-f"), civ = i.value.trim();
+      var val;
+      if(cif === "quantity") val = civ === "" ? null : parseFloat(civ);
+      else if(cif === "tiers") val = civ ? civ.split(",").map(function(x){
+        return x.trim().toUpperCase(); }).filter(Boolean) : [];
+      else val = civ || null;
+      markEdit("checklist_items", i.getAttribute("data-id"), cif, val);
+      i.classList.add("edited");
       return;
     }
     if(i.classList && i.classList.contains("js-ct")){
