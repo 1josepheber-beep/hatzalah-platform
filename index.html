@@ -1343,11 +1343,35 @@
 
   /* build STATE.me from the roster, in the shape the app already expects */
   function sbLoadMe(tried){
-    return SB.from("memberships")
-      .select("user_id,unit_number,display_name,role,status,duty_status,cert_level,is_dispatcher")
-      .eq("org_id", ORG.org_id).maybeSingle()
-      .then(function(r){
-        var m = r.data;
+    /* The person record is where their unit, role and badges are edited.
+       The membership only says they have a login here. Read the person
+       first and fall back to the membership, so an administrator changing
+       someone's role takes effect the next time that person opens the app. */
+    return SB.auth.getUser().then(function(u){
+      var uid = (u && u.data && u.data.user && u.data.user.id) || null;
+      if(!uid) return { data:null, uid:null };
+      return SB.from("people")
+        .select("id,unit_number,first_name,last_name,role,status,duty_status,level,badges")
+        .eq("org_id", ORG.org_id).eq("user_id", uid).maybeSingle()
+        .then(function(pr){ return { data: pr.data, uid: uid }; });
+    })
+      .then(function(pr){
+        if(pr.data){
+          var p = pr.data;
+          return { user_id: pr.uid,
+                   unit_number: p.unit_number,
+                   display_name: ((p.first_name||"") + " " + (p.last_name||"")).trim(),
+                   role: p.role, status: p.status,
+                   duty_status: p.duty_status, cert_level: p.level,
+                   is_dispatcher: p.role === "dispatcher"
+                     || (p.badges || []).indexOf("Dispatcher") > -1 };
+        }
+        return SB.from("memberships")
+          .select("user_id,unit_number,display_name,role,status,duty_status,cert_level,is_dispatcher")
+          .eq("org_id", ORG.org_id).maybeSingle()
+          .then(function(r){ return r.data; });
+      })
+      .then(function(m){
 
         /* First time this person has signed in to this organization.
            join_org puts them on the roster: straight into their own unit
