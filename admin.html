@@ -4015,25 +4015,144 @@
       .then(function(r){ if(r.error) return oops(r.error); toast("Role updated"); });
   });
 
-  /* ================= new organization ================= */
-  $("newOrgBtn").addEventListener("click", function(){
-    var name = prompt("Organization name (e.g. Hatzalah of Lakewood)");
-    if(!name) return;
-    var code = prompt("Short code members will type (lowercase, e.g. lakewood)");
-    if(!code) return;
-    var email = prompt("Email address of the person who will run it");
-    if(!email) return;
-    var domain = prompt("Their email domain, or leave blank (e.g. hatzalahlakewood.org)") || null;
+  /* ================= new organization =================
+     This has to do the whole job. Creating the organization alone leaves
+     one nobody can get into, because the head has no administrator place
+     waiting for them. */
 
-    db.rpc("new_org", {
-      p_code: code.trim().toLowerCase(), p_name: name.trim(),
-      p_contact_email: email.trim().toLowerCase(), p_domain: domain ? domain.trim().toLowerCase() : null
-    }).then(function(r){
-      if(r.error) return oops(r.error);
-      toast("Created " + name);
-      boot();
-    }).catch(oops);
-  });
+  $("newOrgBtn").addEventListener("click", openNewOrg);
+
+  function openNewOrg(){
+    var scrim = document.createElement("div");
+    scrim.className = "scrim"; scrim.id = "newOrgScrim";
+    scrim.innerHTML = '<div class="sheet wide">'
+      + '<h2 style="margin:0 0 4px">Set up a new organization</h2>'
+      + '<p class="hint">They get their own login page, their own people, their own '
+      + 'everything. They will not be able to see this organization, or you theirs.</p>'
+      + '<div class="grid2">'
+      +   '<div class="f"><label>Organization name</label>'
+      +     '<input id="no_name" placeholder="Hatzalah of Manchester"></div>'
+      +   '<div class="f"><label>Code members will type</label>'
+      +     '<input id="no_code" placeholder="manchester"></div>'
+      +   '<div class="f"><label>Their email domain</label>'
+      +     '<input id="no_domain" placeholder="hatzalahmanchester.org"></div>'
+      +   '<div class="f"><label>Name of the person who will run it</label>'
+      +     '<input id="no_headname" placeholder="Yaakov Stern"></div>'
+      +   '<div class="f" style="grid-column:1/-1"><label>Their email address'
+      +     ' <span class="small">this is how they sign in</span></label>'
+      +     '<input id="no_heademail" placeholder="yaakov@hatzalahmanchester.org"></div>'
+      + '</div>'
+      + '<div id="no_err"></div>'
+      + '<div class="row" style="margin-top:14px">'
+      +   '<button id="no_go" class="btn primary">Create it</button>'
+      +   '<button id="no_cancel" class="btn">Cancel</button>'
+      + '</div></div>';
+    document.body.appendChild(scrim);
+
+    scrim.addEventListener("click", function(e){ if(e.target === scrim) scrim.remove(); });
+    $("no_cancel").addEventListener("click", function(){ scrim.remove(); });
+
+    /* the code and domain can nearly always be worked out from the name */
+    $("no_name").addEventListener("blur", function(){
+      var n = $("no_name").value.trim();
+      if(n && !$("no_code").value.trim()){
+        var last = n.split(/\s+/).pop().toLowerCase().replace(/[^a-z0-9]/g, "");
+        $("no_code").value = last;
+      }
+    });
+    $("no_heademail").addEventListener("blur", function(){
+      var e = $("no_heademail").value.trim();
+      if(e.indexOf("@") > -1 && !$("no_domain").value.trim()){
+        $("no_domain").value = e.split("@")[1].toLowerCase();
+      }
+    });
+
+    $("no_go").addEventListener("click", function(){
+      var name = $("no_name").value.trim(),
+          code = $("no_code").value.trim().toLowerCase(),
+          domain = $("no_domain").value.trim().toLowerCase(),
+          headName = $("no_headname").value.trim(),
+          headEmail = $("no_heademail").value.trim().toLowerCase();
+
+      var err = $("no_err");
+      err.innerHTML = "";
+      if(!name || !code || !headEmail){
+        err.innerHTML = '<div class="err">A name, a code and the head\u2019s email are needed.</div>';
+        return;
+      }
+      if(!/^[a-z0-9-]+$/.test(code)){
+        err.innerHTML = '<div class="err">The code can only be lowercase letters, numbers '
+          + 'and dashes.</div>';
+        return;
+      }
+      if(headEmail.indexOf("@") < 1){
+        err.innerHTML = '<div class="err">That email address does not look right.</div>';
+        return;
+      }
+
+      var btn = $("no_go"); btn.disabled = true; btn.textContent = "Creating\u2026";
+      db.rpc("onboard_org", {
+        p_code: code, p_name: name, p_domain: domain || headEmail.split("@")[1],
+        p_head_email: headEmail, p_head_name: headName || null
+      }).then(function(r){
+        btn.disabled = false; btn.textContent = "Create it";
+        if(r.error) return oops(r.error);
+        scrim.remove();
+        showHandover(name, code, headEmail, headName);
+        boot();
+      }).catch(function(e){
+        btn.disabled = false; btn.textContent = "Create it";
+        oops(e);
+      });
+    });
+  }
+
+  /* The organization exists, but they still need a login and to be told
+     three things. Saying so is the difference between this working and
+     you wondering why they cannot get in. */
+  function showHandover(name, code, headEmail, headName){
+    var appUrl = location.origin + location.pathname.replace(/admin\.html$/, "");
+    var scrim = document.createElement("div");
+    scrim.className = "scrim";
+    scrim.innerHTML = '<div class="sheet wide">'
+      + '<h2 style="margin:0 0 4px">' + esc(name) + ' is set up</h2>'
+      + '<p class="hint">Two things left, and they are both quick.</p>'
+
+      + '<div class="steps">'
+      +   '<div class="step"><span class="n">1</span><div><b>Create their login</b>'
+      +     '<div class="small">In Supabase: Authentication \u2192 Users \u2192 Add user. '
+      +     'Use <b>' + esc(headEmail) + '</b>, set a password, turn Auto Confirm on.</div>'
+      +   '</div></div>'
+      +   '<div class="step"><span class="n">2</span><div><b>Send them this</b>'
+      +     '<div class="small">Then they sign in and take over.</div></div></div>'
+      + '</div>'
+
+      + '<div class="f"><label>Message to send</label>'
+      +   '<textarea id="ho_msg" rows="8" style="width:100%;padding:11px;border-radius:9px;'
+      +   'border:1px solid var(--line);font:inherit">'
+      +   esc("Hi " + (headName || "there") + ",\n\n"
+          + "Your organization is set up.\n\n"
+          + "Address: " + appUrl + "\n"
+          + "Organization code: " + code + "\n"
+          + "Sign in with: " + headEmail + "\n"
+          + "Password: (the one I set for you, sent separately)\n\n"
+          + "Once you are in, the admin page is at " + appUrl + "admin.html\n"
+          + "You can add your people, hospitals, protocols and equipment there.\n\n"
+          + "Nobody outside your organization can see any of it.")
+      +   '</textarea></div>'
+
+      + '<div class="row"><button id="ho_copy" class="btn primary">Copy the message</button>'
+      +   '<button id="ho_close" class="btn">Done</button></div></div>';
+    document.body.appendChild(scrim);
+
+    $("ho_close").addEventListener("click", function(){ scrim.remove(); });
+    $("ho_copy").addEventListener("click", function(){
+      var t = $("ho_msg");
+      t.select();
+      try{ document.execCommand("copy"); toast("Copied"); }
+      catch(e){ toast("Select the text and copy it."); }
+    });
+  }
 
   db.auth.getSession().then(function(r){
     if(r && r.data && r.data.session) boot();
