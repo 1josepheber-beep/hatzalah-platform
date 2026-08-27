@@ -2175,12 +2175,40 @@
   var PLACE={loaded:false,cabs:[],cur:null,sel:-1,edit:false,drag:null,editIdx:-1};
   function clampf(v,a,b){ return v<a?a:(v>b?b:v); }
   function isAdmin(){ return !!(STATE.me&&STATE.me.admin); }
+  /* The cabinets and every bin drawn on them now come from this
+     organization's own records, in the same shape the screen already
+     expects: [{id,name,img,bins:[{n,q,x,y,w,h}]}] */
   function loadPlacement(){
-    return new Promise(function(res,rej){
-      if(window.HOH_PLACE){ res(window.HOH_PLACE); return; }
-      var s=document.createElement("script"); s.src="placement.js";
-      s.onload=function(){ window.HOH_PLACE?res(window.HOH_PLACE):rej(); };
-      s.onerror=rej; document.head.appendChild(s);
+    if(window.HOH_PLACE) return Promise.resolve(window.HOH_PLACE);
+    if(!ORG) return Promise.reject();
+    return Promise.all([
+      SB.from("cabinets").select("id,name,photo_path,sort_order")
+        .eq("org_id", ORG.org_id).order("sort_order"),
+      SB.from("cabinet_items").select("cabinet_id,name,quantity_text,x,y,w,h")
+        .eq("org_id", ORG.org_id)
+    ]).then(function(r){
+      var bins = {};
+      (r[1].data || []).forEach(function(b){
+        (bins[b.cabinet_id] = bins[b.cabinet_id] || []).push({
+          n: b.name, q: b.quantity_text || "",
+          x: Number(b.x), y: Number(b.y),
+          w: Number(b.w), h: Number(b.h)
+        });
+      });
+      var out = (r[0].data || []).map(function(c){
+        return { id: c.id, name: c.name,
+                 img: String(c.photo_path || "").replace(/^.*\//, ""),
+                 bins: bins[c.id] || [] };
+      });
+      window.HOH_PLACE = out;
+      try{ localStorage.setItem("hz_place_" + ORG.org_id, JSON.stringify(out)); }catch(e){}
+      return out;
+    }).catch(function(){
+      try{
+        var raw = localStorage.getItem("hz_place_" + (ORG ? ORG.org_id : ""));
+        if(raw){ window.HOH_PLACE = JSON.parse(raw); return window.HOH_PLACE; }
+      }catch(e){}
+      return [];
     });
   }
   function closePlaceScreen(){ $("placeScreen").classList.remove("open"); }
@@ -2404,23 +2432,66 @@
     var p=u.split(","), mime=p[0].match(/:(.*?);/)[1], bin=atob(p[1]), n=bin.length, arr=new Uint8Array(n);
     while(n--) arr[n]=bin.charCodeAt(n); return new Blob([arr],{type:mime});
   }
+  /* Saving used to mean downloading a file and committing it by hand.
+     Now an edit goes straight to this organization's records, and a new
+     cabinet photo is uploaded with it. */
   function saveDownload(){
-    // assign filenames for any newly uploaded photos, queue their downloads
-    var imgDls=[];
-    PLACE.cabs.forEach(function(c){
-      if(c._dirty && c._img){
-        var ext=c._img.indexOf("image/webp")>-1?"webp":"jpg";
-        var fn="cab_"+c.id+"_"+Date.now().toString(36)+"."+ext;
-        c.img=fn; imgDls.push({name:fn,blob:dataURLtoBlob(c._img)});
-        c._dirty=false;
-      }
+    var btn = $("placeSave");
+    if(btn){ btn.disabled = true; btn.textContent = "Saving\u2026"; }
+
+    function done(msg, ok){
+      if(btn){ btn.disabled = false; btn.textContent = "Save"; }
+      toast(msg);
+      if(ok){ window.HOH_PLACE = null; try{ localStorage.removeItem("hz_place_" + ORG.org_id); }catch(e){} }
+    }
+
+    // upload any newly chosen cabinet photos first
+    var uploads = PLACE.cabs.filter(function(c){ return c._dirty && c._img; }).map(function(c){
+      var ext = c._img.indexOf("image/webp") > -1 ? "webp" : "jpg";
+      var fn = "cab_" + String(c.id).replace(/[^a-z0-9]/gi,"") + "_" + Date.now().toString(36) + "." + ext;
+      var path = ORG.org_id + "/cabinets/" + fn;
+      return SB.storage.from("org-branding")
+        .upload(path, dataURLtoBlob(c._img), { upsert:true })
+        .then(function(r){
+          if(r.error) throw r.error;
+          c.img = SB.storage.from("org-branding").getPublicUrl(path).data.publicUrl;
+          c._dirty = false;
+        });
     });
-    dlBlob("placement.js", new Blob([serializePlace()],{type:"text/javascript"}));
-    imgDls.forEach(function(d,i){ setTimeout(function(){ dlBlob(d.name,d.blob); }, 500*(i+1)); });
-    var msg="Downloaded placement.js"+(imgDls.length?(" + "+imgDls.length+" photo(s)"):"")+
-      ". Put them all in your hatzalah-app folder, then commit & push.";
-    toast(msg);
+
+    Promise.all(uploads).then(function(){
+      // replace this organization's cabinets with what is on screen
+      return SB.from("cabinet_items").delete().eq("org_id", ORG.org_id);
+    }).then(function(){
+      return SB.from("cabinets").delete().eq("org_id", ORG.org_id);
+    }).then(function(){
+      return SB.from("cabinets").insert(PLACE.cabs.map(function(c, i){
+        return { org_id: ORG.org_id, name: c.name,
+                 photo_path: c.img || null, sort_order: (i + 1) * 10 };
+      })).select();
+    }).then(function(r){
+      if(r.error) throw r.error;
+      var byName = {};
+      (r.data || []).forEach(function(c){ byName[c.name] = c.id; });
+      var bins = [];
+      PLACE.cabs.forEach(function(c){
+        (c.bins || []).forEach(function(b){
+          if(!byName[c.name]) return;
+          bins.push({ org_id: ORG.org_id, cabinet_id: byName[c.name],
+            name: b.n, quantity_text: b.q == null ? null : String(b.q),
+            x: Number(b.x), y: Number(b.y), w: Number(b.w), h: Number(b.h) });
+        });
+      });
+      if(!bins.length) return { error:null };
+      return SB.from("cabinet_items").insert(bins);
+    }).then(function(r){
+      if(r && r.error) throw r.error;
+      done("Saved. Every member sees this next time they open the app.", true);
+    }).catch(function(e){
+      done("Could not save: " + ((e && e.message) || "check your connection"), false);
+    });
   }
+
   // ----- bindings -----
   // ----- search all items across every cabinet -----
   function renderPlaceSearch(q){
@@ -2483,12 +2554,37 @@
   // ---------- Required Equipment (compliance checklist) ----------
   var EQ={loaded:false,d:null,tier:"all",q:"",edit:false,collapsed:{},editId:null};
   function loadEquip(){
-    return new Promise(function(res,rej){
-      if(window.HOH_EQUIP){ res(window.HOH_EQUIP); return; }
-      var s=document.createElement("script"); s.src="equipment.js";
-      s.onload=function(){ window.HOH_EQUIP?res(window.HOH_EQUIP):rej(); };
-      s.onerror=rej; document.head.appendChild(s);
-    });
+    if(window.HOH_EQUIP) return Promise.resolve(window.HOH_EQUIP);
+    if(!ORG) return Promise.reject();
+    return SB.from("checklist_items")
+      .select("id,name,category,tiers,quantity,source,our_note,notes,sort_order")
+      .eq("org_id", ORG.org_id).eq("is_active", true).order("sort_order")
+      .then(function(r){
+        var rows = r.data || [], cats = [];
+        var items = rows.map(function(it, i){
+          if(cats.indexOf(it.category) < 0) cats.push(it.category);
+          return { id: i + 1, tier: String((it.tiers||["BLS"])[0]).toLowerCase(),
+                   cat: it.category, name: it.name,
+                   qty: it.quantity == null ? "" : String(it.quantity),
+                   src: String(it.source || "").toLowerCase(),
+                   ours: it.our_note || "", have: false,
+                   notes: it.notes || "", subs: [] };
+        });
+        var out = {
+          legend: { s:"State minimum", c:"City minimum", sc:"State + City" },
+          note: "Minimum equipment for this organization.",
+          cats: cats, items: items
+        };
+        window.HOH_EQUIP = out;
+        try{ localStorage.setItem("hz_equip_" + ORG.org_id, JSON.stringify(out)); }catch(e){}
+        return out;
+      }).catch(function(){
+        try{
+          var raw = localStorage.getItem("hz_equip_" + (ORG ? ORG.org_id : ""));
+          if(raw){ window.HOH_EQUIP = JSON.parse(raw); return window.HOH_EQUIP; }
+        }catch(e){}
+        return { legend:{}, note:"", cats:[], items:[] };
+      });
   }
   function closeEquip(){ $("equipScreen").classList.remove("open"); }
   function openEquip(){
@@ -2631,9 +2727,28 @@
   }
   function serializeEquip(){ return "window.HOH_EQUIP = "+JSON.stringify(EQ.d)+";"; }
   function eqSaveDownload(){
-    dlBlob("equipment.js", new Blob([serializeEquip()],{type:"text/javascript"}));
-    toast("Downloaded equipment.js. Put it in your hatzalah-app folder, then commit & push.");
+    var items = (EQ.d && EQ.d.items) || [];
+    if(!items.length){ toast("Nothing to save."); return; }
+    SB.from("checklist_items").delete().eq("org_id", ORG.org_id).then(function(d){
+      if(d.error) throw d.error;
+      return SB.from("checklist_items").insert(items.map(function(it, i){
+        return { org_id: ORG.org_id, name: it.name, category: it.cat,
+                 tiers: [String(it.tier || "bls").toUpperCase()],
+                 quantity: parseFloat(String(it.qty || "").replace(/[^0-9.]/g,"")) || null,
+                 source: (it.src || "").toUpperCase() || null,
+                 our_note: it.ours || null, notes: it.notes || null,
+                 sort_order: (i + 1) * 10, is_active: true };
+      }));
+    }).then(function(r){
+      if(r.error) throw r.error;
+      window.HOH_EQUIP = null;
+      try{ localStorage.removeItem("hz_equip_" + ORG.org_id); }catch(e){}
+      toast("Saved. Every member sees this next time they open the app.");
+    }).catch(function(e){
+      toast("Could not save: " + ((e && e.message) || "check your connection"));
+    });
   }
+
   // ---- bindings ----
   $("equipBack").addEventListener("click",navBack);
   $("equipEdit").addEventListener("click",function(){ setEqEdit(!EQ.edit); });
