@@ -214,6 +214,7 @@
     <div class="f"><label for="pw">Password</label>
       <input id="pw" type="password" autocomplete="current-password"></div>
     <button id="loginBtn" class="btn">Sign in</button>
+    <button id="resetBtn" class="btn" style="margin-top:8px;background:#fff;color:var(--brand);border:1px solid var(--line)">Email me a link to set a password</button>
   </div>
 </section>
 
@@ -392,7 +393,7 @@
     db.auth.signInWithPassword({ email: $("email").value.trim(), password: $("pw").value })
       .then(function(r){
         b.disabled = false; b.textContent = "Sign in";
-        if(r.error){ $("loginErr").textContent = r.error.message;
+        if(r.error){ $("loginErr").innerHTML = explainSignIn(r.error.message, $("email").value.trim());
                      $("loginErr").classList.remove("hidden"); return; }
         boot();
       }).catch(function(){
@@ -402,6 +403,49 @@
       });
   });
   $("pw").addEventListener("keydown", function(e){ if(e.key==="Enter") $("loginBtn").click(); });
+
+  /* Supabase's messages are short and say nothing about what to do. These
+     are the three reasons a new organization's head cannot get in. */
+  function explainSignIn(msg, email){
+    var m = String(msg || "").toLowerCase();
+    if(m.indexOf("not confirmed") > -1){
+      return "This account has not been confirmed. In Supabase, open "
+        + "Authentication \u2192 Users, click " + esc(email) + ", and confirm it \u2014 "
+        + "or turn on Auto Confirm when creating the login.";
+    }
+    if(m.indexOf("invalid login") > -1){
+      return "That email and password do not match an account.<br><br>"
+        + "The three usual reasons: the login was never created in Supabase under "
+        + "Authentication \u2192 Users; the address differs from the one there; or the "
+        + "password has a space on the end from copying it. Use the button below to set "
+        + "a fresh password by email.";
+    }
+    if(m.indexOf("rate") > -1 || m.indexOf("many") > -1){
+      return "Too many attempts. Wait a minute and try again.";
+    }
+    return esc(msg || "Sign-in failed.");
+  }
+
+  $("resetBtn").addEventListener("click", function(){
+    var em = $("email").value.trim();
+    if(!em || em.indexOf("@") < 1){
+      $("loginErr").textContent = "Type the email address first, then press this.";
+      $("loginErr").classList.remove("hidden");
+      return;
+    }
+    var b = $("resetBtn"); b.disabled = true; b.textContent = "Sending\u2026";
+    db.auth.resetPasswordForEmail(em, { redirectTo: location.href }).then(function(r){
+      b.disabled = false; b.textContent = "Email me a link to set a password";
+      $("loginErr").classList.remove("hidden");
+      $("loginErr").textContent = r && r.error
+        ? r.error.message
+        : "If that address has an account, a link is on its way. It sets a new password.";
+    }).catch(function(){
+      b.disabled = false; b.textContent = "Email me a link to set a password";
+      $("loginErr").textContent = "Could not reach the server.";
+      $("loginErr").classList.remove("hidden");
+    });
+  });
   $("signout").addEventListener("click", function(){
     db.auth.signOut().then(function(){ location.reload(); });
   });
