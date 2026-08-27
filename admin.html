@@ -65,7 +65,15 @@
   .card .hint{margin:0 0 14px;color:var(--muted);font-size:13.5px}
   .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:13px}
   .row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
-  table{width:100%;border-collapse:collapse;font-size:14px}
+  .scroller{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{width:100%;border-collapse:collapse;font-size:14px;min-width:820px}
+  table input{width:100%;min-width:0;padding:8px 9px;border-radius:7px;
+    border:1px solid var(--line);font-size:13.5px}
+  td.actions{width:1%;white-space:nowrap;text-align:right}
+  .xbtn{width:32px;height:32px;padding:0;border-radius:8px;background:#FDECEC;
+    border:1px solid #F0BEC0;color:var(--red);font-size:16px;line-height:1;font-weight:700}
+  .coords{display:flex;gap:5px;min-width:186px}
+  .coords input{width:88px;flex:none}
   th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.05em;
     color:var(--muted);padding:8px 9px;border-bottom:2px solid var(--line)}
   td{padding:9px;border-bottom:1px solid var(--line);vertical-align:middle}
@@ -159,7 +167,42 @@
   var db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
   var $  = function(id){ return document.getElementById(id); };
 
-  var isSuper = false, orgs = [], orgId = null, org = null, tab = "members";
+  var isSuper = false, orgs = [], orgId = null, org = null;
+  var TABS = ["members","hospitals","protocols","settings","features"];
+
+  /* Remember where you were. Refreshing in the middle of data entry and
+     landing back on the first tab is maddening. */
+  function readState(){
+    var h = (location.hash || "").replace(/^#/,"");
+    var parts = {};
+    h.split("&").forEach(function(kv){
+      var p = kv.split("=");
+      if(p[0]) parts[p[0]] = decodeURIComponent(p[1] || "");
+    });
+    return parts;
+  }
+  function writeState(){
+    var h = "tab=" + tab + (orgId ? "&org=" + orgId : "");
+    if(location.hash.replace(/^#/,"") !== h){
+      history.replaceState(null, "", "#" + h);
+    }
+    try{ localStorage.setItem("hzadmin_state", JSON.stringify({tab:tab, org:orgId})); }catch(e){}
+  }
+  function savedState(){
+    var st = readState();
+    if(!st.tab || !st.org){
+      try{
+        var ls = JSON.parse(localStorage.getItem("hzadmin_state") || "{}");
+        st.tab = st.tab || ls.tab; st.org = st.org || ls.org;
+      }catch(e){}
+    }
+    return st;
+  }
+
+  var tab = (function(){
+    var t = savedState().tab;
+    return TABS.indexOf(t) > -1 ? t : "members";
+  })();
 
   function esc(s){
     return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
@@ -218,7 +261,11 @@
       $("orgPick").innerHTML = orgs.map(function(o){
         return '<option value="'+o.id+'">'+esc(o.name)+' ('+esc(o.code)+')</option>';
       }).join("");
-      selectOrg(orgs[0].id);
+      var want = savedState().org;
+      var found = null;
+      for(var i=0;i<orgs.length;i++){ if(orgs[i].id === want) found = orgs[i].id; }
+      showTab(tab);
+      selectOrg(found || orgs[0].id);
     }).catch(oops);
   }
 
@@ -226,19 +273,23 @@
     orgId = id;
     for(var i=0;i<orgs.length;i++){ if(orgs[i].id === id) org = orgs[i]; }
     $("orgPick").value = id;
+    writeState();
     render();
   }
   $("orgPick").addEventListener("change", function(){ selectOrg($("orgPick").value); });
 
+  function showTab(t){
+    tab = TABS.indexOf(t) > -1 ? t : "members";
+    Array.prototype.forEach.call(document.querySelectorAll("nav button"), function(x){
+      x.setAttribute("aria-current", x.getAttribute("data-tab") === tab ? "true" : "false");
+    });
+    TABS.forEach(function(n){ $("tab-"+n).classList.toggle("hidden", n !== tab); });
+    writeState();
+  }
+
   Array.prototype.forEach.call(document.querySelectorAll("nav button"), function(b){
     b.addEventListener("click", function(){
-      tab = b.getAttribute("data-tab");
-      Array.prototype.forEach.call(document.querySelectorAll("nav button"), function(x){
-        x.setAttribute("aria-current", x === b ? "true" : "false");
-      });
-      ["members","hospitals","protocols","settings","features"].forEach(function(t){
-        $("tab-"+t).classList.toggle("hidden", t !== tab);
-      });
+      showTab(b.getAttribute("data-tab"));
       render();
     });
   });
@@ -294,7 +345,7 @@
         el.innerHTML = html; return;
       }
 
-      html += '<div style="overflow-x:auto"><table><thead><tr>'
+      html += '<div class="scroller"><table><thead><tr>'
            +  '<th>Name</th><th>Unit</th><th>Role</th><th>Status</th><th></th>'
            +  '</tr></thead><tbody>';
 
@@ -392,7 +443,7 @@
           el.innerHTML = html; wireHospitalForm(); return;
         }
 
-        html += '<div style="overflow-x:auto"><table><thead><tr>'
+        html += '<div class="scroller"><table><thead><tr>'
              +  '<th>Name</th><th>Phone</th><th>Door</th><th>Address</th>'
              +  '<th>Ambulance bay</th><th></th>'
              +  '</tr></thead><tbody>';
@@ -402,11 +453,13 @@
             + '<td><input class="js-h" data-id="'+h.id+'" data-f="phone_call" value="'+esc(h.phone_call||"")+'" placeholder="\u2014"></td>'
             + '<td><input class="js-h" data-id="'+h.id+'" data-f="door_code" value="'+esc(h.door_code||"")+'" placeholder="\u2014" style="width:90px"></td>'
             + '<td><input class="js-h" data-id="'+h.id+'" data-f="address" value="'+esc(h.address||"")+'" placeholder="\u2014"></td>'
-            + '<td style="white-space:nowrap">'
-            +   '<input class="js-h" data-id="'+h.id+'" data-f="lat" value="'+esc(h.lat||"")+'" placeholder="lat" style="width:88px" inputmode="decimal">'
-            +   '<input class="js-h" data-id="'+h.id+'" data-f="lng" value="'+esc(h.lng||"")+'" placeholder="lng" style="width:88px;margin-left:4px" inputmode="decimal">'
-            + '</td>'
-            + '<td><button class="btn danger js-hdel" data-id="'+h.id+'" data-name="'+esc(h.name)+'">Delete</button></td>'
+            + '<td><div class="coords">'
+            +   '<input class="js-h" data-id="'+h.id+'" data-f="lat" value="'+esc(h.lat||"")+'" placeholder="lat" inputmode="decimal">'
+            +   '<input class="js-h" data-id="'+h.id+'" data-f="lng" value="'+esc(h.lng||"")+'" placeholder="lng" inputmode="decimal">'
+            + '</div></td>'
+            + '<td class="actions"><button class="xbtn js-hdel" data-id="'+h.id+'" '
+            +   'data-name="'+esc(h.name)+'" title="Delete '+esc(h.name)+'" '
+            +   'aria-label="Delete '+esc(h.name)+'">\u00D7</button></td>'
             + '</tr>';
         });
         html += '</tbody></table></div>'
@@ -591,7 +644,7 @@
       +   (b.specCols.length ? '<br>Specialties: '+esc(b.specCols.join(", ")) : '')
       +   (b.skipped ? '<br>'+b.skipped+' rows left out (hidden or no name).' : '')
       + '</div>'
-      + '<div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Phone</th><th>Door</th>'
+      + '<div class="scroller"><table><thead><tr><th>Name</th><th>Phone</th><th>Door</th>'
       +   '<th>Bay coords</th><th>Specialties</th></tr></thead><tbody>'
       + b.rows.slice(0,6).map(function(x){
           return '<tr><td>'+esc(x.name)+'</td><td>'+esc(x.phone_call||"\u2014")+'</td>'
@@ -784,7 +837,7 @@
         if(!sets.length){
           html += '<div class="empty">Nothing uploaded yet.</div></div>';
         } else {
-          html += '<div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Version</th>'
+          html += '<div class="scroller"><table><thead><tr><th>Name</th><th>Version</th>'
                +  '<th>Pages</th><th>Members can see it</th><th></th></tr></thead><tbody>';
           sets.forEach(function(x){
             html += '<tr>'
@@ -793,8 +846,8 @@
               + '<td>'+(x.page_count||0)+'</td>'
               + '<td><button class="toggle js-pubset" data-id="'+x.id+'" aria-pressed="'
               +   (x.is_published?"true":"false")+'"><span></span></button></td>'
-              + '<td><button class="btn danger js-delset" data-id="'+x.id+'" '
-              +   'data-name="'+esc(x.name)+'">Delete</button></td>'
+              + '<td class="actions"><button class="xbtn js-delset" data-id="'+x.id+'" '
+              +   'data-name="'+esc(x.name)+'" title="Delete" aria-label="Delete">\u00D7</button></td>'
               + '</tr>';
           });
           html += '</tbody></table></div>'
