@@ -846,8 +846,12 @@
               + '<td>'+(x.page_count||0)+'</td>'
               + '<td><button class="toggle js-pubset" data-id="'+x.id+'" aria-pressed="'
               +   (x.is_published?"true":"false")+'"><span></span></button></td>'
-              + '<td class="actions"><button class="xbtn js-delset" data-id="'+x.id+'" '
-              +   'data-name="'+esc(x.name)+'" title="Delete" aria-label="Delete">\u00D7</button></td>'
+              + '<td class="actions">'
+              +   '<button class="btn js-toc" data-id="'+x.id+'" data-name="'+esc(x.name)+'" '
+              +     'style="padding:7px 11px;font-size:13px">Contents</button> '
+              +   '<button class="xbtn js-delset" data-id="'+x.id+'" '
+              +     'data-name="'+esc(x.name)+'" title="Delete" aria-label="Delete">\u00D7</button>'
+              + '</td>'
               + '</tr>';
           });
           html += '</tbody></table></div>'
@@ -1014,6 +1018,119 @@
     }
   }
 
+  /* ---------- the contents list ----------
+     A protocol book is useless as a flat run of pages. Members look things
+     up by name. If the PDF has bookmarks we take them automatically; when
+     it does not, the admin pastes the book's own contents page here. */
+
+  var TOC_SET = null;
+
+  function openToc(setId, setName){
+    TOC_SET = setId;
+    db.from("protocol_toc").select("name,volume,page_number,page_label,sort_order")
+      .eq("set_id", setId).order("sort_order")
+      .then(function(r){
+        var existing = r.data || [];
+        $("tab-protocols").innerHTML =
+          '<div class="card"><h2>Contents for \u201C'+esc(setName)+'\u201D</h2>'
+          + '<p class="hint">This is what members see before they search, so they can browse by '
+          + 'name instead of flicking through pages.</p>'
+          + '<p class="hint">Paste the book\u2019s own contents page. One entry per line, with the '
+          + 'page number at the end:</p>'
+          + '<pre class="mono" style="background:#F4F6FA;padding:11px;border-radius:9px;'
+          +   'white-space:pre-wrap;margin:0 0 13px">Cardiac\n'
+          +   '6.03  Chest Pain    47\n'
+          +   '6.04  Cardiac Arrest    52\n'
+          +   'Respiratory\n'
+          +   '7.01  Asthma    61</pre>'
+          + '<p class="hint">A line with no page number becomes a heading for the ones under it.</p>'
+          + '<div class="f"><textarea id="toc_data" rows="10" placeholder="Paste the contents here">'
+          + esc(existing.map(function(e){
+              return (e.volume ? "" : "") + e.name + "\t" + e.page_number;
+            }).join("\n"))
+          + '</textarea></div>'
+          + '<div class="row"><button id="toc_check" class="btn primary">Check it</button>'
+          +   '<button id="toc_save" class="btn ok hidden">Save contents</button>'
+          +   '<button id="toc_back" class="btn">Back</button></div>'
+          + '<div id="toc_out" style="margin-top:13px">'
+          +   (existing.length ? '<div class="warn">'+existing.length
+                + ' entries saved at the moment.</div>' : '')
+          + '</div></div>';
+      }).catch(oops);
+  }
+
+  function parseToc(text){
+    var lines = text.replace(/\r/g,"").split("\n");
+    var out = [], volume = null, order = 0, bad = 0;
+
+    lines.forEach(function(raw){
+      var line = raw.trim();
+      if(!line) return;
+
+      // a page number at the end of the line, possibly after dot leaders
+      var m = line.match(/^(.*?)[\s.\u2026\t]+(\d{1,4})$/);
+      if(!m){
+        // no page number: this is a section heading
+        if(line.length <= 60){ volume = line; }
+        else { bad++; }
+        return;
+      }
+      var name = m[1].replace(/[.\u2026\s]+$/,"").trim();
+      var page = parseInt(m[2], 10);
+      if(!name || !page){ bad++; return; }
+      order++;
+      out.push({ org_id:orgId, set_id:TOC_SET, name:name, volume:volume,
+                 page_number:page, sort_order:order });
+    });
+    return { rows:out, bad:bad };
+  }
+
+  function checkToc(){
+    var r = parseToc($("toc_data").value);
+    var out = $("toc_out");
+    if(!r.rows.length){
+      out.innerHTML = '<div class="err">No entries found. Each line needs a page number at the end.</div>';
+      $("toc_save").classList.add("hidden");
+      return;
+    }
+    var vols = {};
+    r.rows.forEach(function(x){ if(x.volume) vols[x.volume] = 1; });
+    var maxPage = r.rows.reduce(function(a,b){ return Math.max(a, b.page_number); }, 0);
+
+    out.innerHTML = '<div class="warn"><b>'+r.rows.length+' entries.</b>'
+      + (Object.keys(vols).length ? '<br>Headings: '+esc(Object.keys(vols).join(", ")) : '')
+      + '<br>Highest page referred to: '+maxPage
+      + (r.bad ? '<br>'+r.bad+' lines could not be read and will be left out.' : '')
+      + '</div>'
+      + '<div class="scroller"><table><thead><tr><th>Heading</th><th>Entry</th><th>Page</th>'
+      + '</tr></thead><tbody>'
+      + r.rows.slice(0,8).map(function(x){
+          return '<tr><td class="small">'+esc(x.volume||"\u2014")+'</td>'
+            + '<td>'+esc(x.name)+'</td><td>'+x.page_number+'</td></tr>';
+        }).join("")
+      + '</tbody></table></div>'
+      + (r.rows.length > 8 ? '<p class="hint">First 8 of '+r.rows.length+'.</p>' : '');
+    $("toc_save").classList.remove("hidden");
+  }
+
+  function saveToc(){
+    var r = parseToc($("toc_data").value);
+    if(!r.rows.length) return;
+    var b = $("toc_save"); b.disabled = true; b.textContent = "Saving\u2026";
+    db.from("protocol_toc").delete().eq("set_id", TOC_SET).then(function(d){
+      if(d.error) throw d.error;
+      return db.from("protocol_toc").insert(r.rows);
+    }).then(function(ins){
+      b.disabled = false; b.textContent = "Save contents";
+      if(ins.error) throw ins.error;
+      toast("Saved " + r.rows.length + " entries");
+      renderProtocols();
+    }).catch(function(e){
+      b.disabled = false; b.textContent = "Save contents";
+      $("toc_out").innerHTML = '<div class="err">'+esc(e.message||"Could not save")+'</div>';
+    });
+  }
+
   /* ================= ORGANIZATION ================= */
   function renderSettings(){
     var o = org;
@@ -1176,6 +1293,12 @@
       });
       return;
     }
+    var tc = t.closest(".js-toc");
+    if(tc){ openToc(tc.getAttribute("data-id"), tc.getAttribute("data-name")); return; }
+    if(t.id === "toc_check"){ checkToc(); return; }
+    if(t.id === "toc_save"){ saveToc(); return; }
+    if(t.id === "toc_back"){ renderProtocols(); return; }
+
     var ps = t.closest(".js-pubset");
     if(ps){
       var on = ps.getAttribute("aria-pressed") !== "true";

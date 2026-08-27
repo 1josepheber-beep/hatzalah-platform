@@ -177,6 +177,52 @@
   .nentry .t{font-size:12px;color:var(--muted);margin-bottom:5px}
   .nentry .v{font-size:14.5px;font-variant-numeric:tabular-nums;line-height:1.5}
 
+  /* ---------- cpr ---------- */
+  .clocks{margin-bottom:14px}
+  .clock{background:var(--card);border:1px solid var(--line);border-radius:13px;
+    padding:13px;text-align:center}
+  .clock .lab{display:block;font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--muted);font-weight:650}
+  .clock b{display:block;font-size:30px;font-weight:700;font-variant-numeric:tabular-nums;
+    line-height:1.15;margin-top:3px}
+  .clock.big b{font-size:42px}
+  .clock .sub3{display:block;font-size:11.5px;color:var(--muted);margin-top:2px}
+  .clockrow{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px}
+  .clock.warn b{color:#B3121B}
+  .cprgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:14px 0}
+  .cbtn{padding:15px 10px;border-radius:12px;border:1px solid var(--line);
+    background:var(--card);font-size:14.5px;font-weight:600;text-align:center;line-height:1.25}
+  .cbtn.green{background:#EAF4EC;border-color:#B9DCC4;color:#146030}
+  .cbtn.red{background:#FDECEC;border-color:#F0BEC0;color:#93151C}
+  .cbtn.amber{background:#FFF6E0;border-color:#E8CE86;color:#7A5C0C}
+  .cbtn.blue{background:#EAF0F9;border-color:#BBCDE7;color:#28456F}
+  .cbtn:disabled{opacity:.45}
+  .cprlog{background:var(--card);border:1px solid var(--line);border-radius:13px;
+    padding:6px 13px;max-height:290px;overflow:auto}
+  .lrow{display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .lrow:last-child{border-bottom:0}
+  .lrow .t{font-variant-numeric:tabular-nums;color:var(--muted);min-width:52px}
+  .lrow .e{flex:1;font-weight:600}
+  .trainbadge{background:#FFF3D4;color:#8A6A1A;font-size:11.5px;font-weight:700;
+    padding:3px 9px;border-radius:6px;margin-left:8px}
+
+  /* ---------- settings ---------- */
+  .srow{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:13px;margin-bottom:8px}
+  .srow label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--muted);font-weight:650;margin-bottom:5px}
+  .srow input{width:100%;padding:11px;border-radius:9px;border:1px solid var(--line);
+    font-size:16px;background:var(--bg)}
+  .srow .val{font-size:15px}
+  .dev{display:flex;gap:11px;align-items:center;padding:11px 0;
+    border-bottom:1px solid var(--line)}
+  .dev:last-child{border-bottom:0}
+  .dev .who{flex:1;min-width:0}
+  .dev b{display:block;font-size:14.5px;font-weight:600}
+  .dev .sub2{font-size:12.5px;color:var(--muted)}
+  .tiny{padding:8px 12px;border-radius:9px;border:1px solid #F0BEC0;background:#FDECEC;
+    color:#B3121B;font-size:13px;font-weight:600}
+
   /* ---------- reader ---------- */
   .reader{position:fixed;inset:0;z-index:50;background:#0B1017;display:flex;flex-direction:column}
   .rbar{display:flex;align-items:center;gap:9px;padding:calc(8px + env(safe-area-inset-top)) 12px 8px;
@@ -283,6 +329,23 @@
     <section id="certScreen" class="hidden">
       <div id="certBody"></div>
     </section>
+    <!-- settings -->
+    <section id="setScreen" class="hidden"><div id="setBody"></div></section>
+    <!-- cpr -->
+    <section id="cprScreen" class="hidden">
+      <div class="clocks">
+        <div class="clock big"><span class="lab">Total code time</span><b id="cTotal">0:00</b></div>
+        <div class="clockrow">
+          <div class="clock"><span class="lab">Compression cycle</span><b id="cCycle">2:00</b>
+            <span class="sub3" id="cCycleN">Cycle 1</span></div>
+          <div class="clock"><span class="lab">Since last epi</span><b id="cEpi">—</b>
+            <span class="sub3">Every 3–5 min</span></div>
+        </div>
+      </div>
+      <div id="cprControls"></div>
+      <div id="cprButtons" class="cprgrid"></div>
+      <div id="cprLog" class="cprlog"></div>
+    </section>
     <!-- protocols -->
     <section id="protoScreen" class="hidden">
       <div id="protoResults"></div>
@@ -345,7 +408,8 @@
   /* which tiles actually have a screen built. Everything else shows
      "Coming soon" rather than pretending to work. */
   var BUILT = { "/hospitals":true, "/protocols":true, "/vitals":true,
-               "/notes":true, "/directory":true, "/certifications":true };
+               "/notes":true, "/directory":true, "/certifications":true,
+               "/cpr":true, "/settings":true };
 
   var ICONS = {
     hospital:'<path d="M12 6v12M6 12h12"/><rect x="3" y="3" width="18" height="18" rx="3"/>',
@@ -366,7 +430,8 @@
   var org = null, me = null, tiles = [], features = {},
       hospitals = [], specs = [], filters = {}, fromCache = false, screen = "home";
   var protoSets = [], protoToc = [], protoHits = [], reader = null;
-  var vitals = [], directory = [];
+  var vitals = [], directory = [], protoPages = [];
+  var cprButtons = [], myPhone = "";
 
   /* ---------- storage, always guarded ---------- */
   function put(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
@@ -502,11 +567,12 @@
       hospitals = c.hospitals || []; specs = c.specs || [];
       protoSets = c.protoSets || []; protoToc = c.protoToc || [];
       vitals = c.vitals || []; directory = c.directory || [];
+      protoPages = c.protoPages || []; cprButtons = c.cprButtons || [];
       fromCache = true; renderHome();
     }
 
     Promise.all([
-      db.from("memberships").select("role,status,unit_number,display_name")
+      db.from("memberships").select("user_id,role,status,unit_number,display_name")
         .eq("org_id", org.org_id).maybeSingle(),
       db.from("orgs").select("name,dispatch_phone,medical_control_phone,epcr_url,brand_primary,brand_on_primary")
         .eq("id", org.org_id).maybeSingle(),
@@ -524,7 +590,12 @@
         .eq("org_id", org.org_id).order("sort_order"),
       db.from("vitals_reference").select("tab,section,item,value1,value2,value3,sort_order")
         .eq("org_id", org.org_id).eq("is_active", true).order("sort_order"),
-      db.from("v_directory").select("*").eq("org_id", org.org_id).order("sort_order")
+      db.from("v_directory").select("*").eq("org_id", org.org_id).order("sort_order"),
+      db.from("protocol_pages").select("set_id,page_number,page_label,body_text")
+        .eq("org_id", org.org_id).order("page_number"),
+      db.from("cpr_buttons").select("label,action,color,sort_order,is_active")
+        .eq("org_id", org.org_id).eq("is_active", true).order("sort_order"),
+      db.from("profiles").select("phone").maybeSingle()
     ]).then(function(r){
       if(r[0].data) me = r[0].data;
       if(r[1].data){
@@ -544,6 +615,9 @@
       protoToc  = r[7].data || [];
       vitals    = r[8].data || [];
       directory = r[9].data || [];
+      protoPages = r[10].data || [];
+      cprButtons = r[11].data || [];
+      myPhone    = (r[12].data && r[12].data.phone) || "";
       fromCache = false;
 
       if(!me || me.status !== "active"){
@@ -556,10 +630,14 @@
         return;
       }
 
+      registerDevice();
+      flushCodes(false);
+
       put(cacheKey(), {me:me, tiles:tiles, features:features,
                        hospitals:hospitals, specs:specs, org:org,
                        protoSets:protoSets, protoToc:protoToc,
-                       vitals:vitals, directory:directory});
+                       vitals:vitals, directory:directory, protoPages:protoPages,
+                       cprButtons:cprButtons});
       renderHome();
     }).catch(function(){
       if(!tiles.length){
@@ -642,6 +720,8 @@
       if(target === "/notes") openNotes();
       if(target === "/directory") openDirectory();
       if(target === "/certifications") openCerts();
+      if(target === "/cpr") openCpr();
+      if(target === "/settings") openSettings();
       return;
     }
   });
@@ -649,7 +729,7 @@
   $("backBtn").addEventListener("click", renderHome);
 
   var SCREENS = ["homeScreen","hospScreen","protoScreen","vitalsScreen",
-                 "notesScreen","dirScreen","certScreen"];
+                 "notesScreen","dirScreen","certScreen","cprScreen","setScreen"];
   function hideAll(){ SCREENS.forEach(function(id){ show($(id), false); }); }
 
   function chrome(title, opts){
@@ -919,6 +999,330 @@
     });
   }
 
+  /* remember this device so it can be listed - and signed out - later */
+  function registerDevice(){
+    var key = get("hz_device_key");
+    if(!key){
+      key = "dev-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2,10);
+      put("hz_device_key", key);
+    }
+    var ua = navigator.userAgent || "";
+    var platform = /iPhone|iPad|iPod/i.test(ua) ? "iOS"
+                 : /Android/i.test(ua) ? "Android"
+                 : /Windows/i.test(ua) ? "Windows"
+                 : /Mac/i.test(ua) ? "Mac" : "Browser";
+    var label = platform + (window.matchMedia
+      && window.matchMedia("(display-mode: standalone)").matches ? " app" : " browser");
+    db.rpc("touch_device", { p_org: org.org_id, p_key: key, p_label: label,
+                             p_platform: platform, p_biometric: false })
+      .catch(function(){});
+  }
+
+  /* =============== CPR tracker ===============
+     The pen-and-paper code sheet, on the phone. One responder runs it on
+     scene. Everything is kept locally first so it survives a stairwell
+     with no signal, then saved when there is one. No patient details. */
+
+  var cpr = null, cprTick = null, metronome = null;
+
+  function openCpr(){
+    chrome("CPR Tracker", { screen:"cpr" });
+    hideAll(); show($("cprScreen"), true);
+    if(!cpr) cpr = restoreCode() || newCode();
+    renderCpr();
+    if(cpr.running) startTick();
+  }
+
+  function newCode(){
+    return {
+      id: "code-" + Date.now() + "-" + Math.random().toString(36).slice(2,8),
+      running:false, training:false, hasStarted:false,
+      startedAt:null, elapsed:0, events:[],
+      cycleStart:null, cycleNo:1, lastEpi:null,
+      shocks:0, epis:0, metronome:false
+    };
+  }
+  function saveCode(){ put("hz_cpr_active", cpr); }
+  function restoreCode(){ return get("hz_cpr_active"); }
+
+  function mmss(sec){
+    sec = Math.max(0, Math.floor(sec));
+    return Math.floor(sec/60) + ":" + String(sec%60).padStart(2,"0");
+  }
+  function nowSec(){ return Math.floor(Date.now()/1000); }
+  function codeSeconds(){
+    // elapsed holds the time banked before the last pause; startedAt only
+    // counts while running. Paused must freeze the clock, not zero it.
+    return cpr.elapsed + (cpr.running && cpr.startedAt != null ? nowSec() - cpr.startedAt : 0);
+  }
+
+  function startTick(){
+    clearInterval(cprTick);
+    cprTick = setInterval(tickCpr, 250);
+  }
+
+  function tickCpr(){
+    if(!cpr) return;
+    var t = codeSeconds();
+    $("cTotal").textContent = mmss(t);
+
+    if(cpr.cycleStart != null && cpr.running){
+      var left = 120 - (nowSec() - cpr.cycleStart);
+      $("cCycle").textContent = left >= 0 ? mmss(left) : "-" + mmss(-left);
+      $("cCycle").parentNode.classList.toggle("warn", left <= 0);
+      $("cCycleN").textContent = "Cycle " + cpr.cycleNo
+        + (left <= 0 ? " · rhythm check due" : "");
+    }
+
+    if(cpr.lastEpi != null){
+      var since = nowSec() - cpr.lastEpi;
+      $("cEpi").textContent = mmss(since);
+      $("cEpi").parentNode.classList.toggle("warn", since >= 300);
+    }
+  }
+
+  function logEvent(label, detail){
+    cpr.events.push({ at: codeSeconds(), label: label, detail: detail || null });
+    saveCode();
+    renderLog();
+  }
+
+  function renderCpr(){
+    var running = cpr.running, started = cpr.hasStarted;
+
+    $("cprControls").innerHTML =
+      '<div class="cprgrid" style="margin:0 0 4px">'
+      + '<button class="cbtn ' + (running ? 'red' : 'green') + ' js-cpr" data-a="'
+      +   (running ? 'pause' : (started ? 'resume' : 'start')) + '">'
+      +   (running ? 'Pause' : (started ? 'Resume' : 'Start code')) + '</button>'
+      + '<button class="cbtn js-cpr" data-a="metronome">'
+      +   (cpr.metronome ? 'Metronome off' : 'Metronome') + '</button>'
+      + '</div>'
+      + '<div class="cprgrid" style="margin:8px 0 0">'
+      + '<button class="cbtn ' + (cpr.training ? 'amber' : '') + ' js-cpr" data-a="training"'
+      +   (started ? ' disabled' : '') + '>'
+      +   (cpr.training ? 'Training mode on' : 'Training mode') + '</button>'
+      + '<button class="cbtn js-cpr" data-a="save"' + (started ? '' : ' disabled') + '>'
+      +   'Save code log</button>'
+      + '</div>';
+
+    $("screenTitle").innerHTML = "CPR Tracker"
+      + (cpr.training ? '<span class="trainbadge">TRAINING</span>' : '');
+
+    var btns = (cprButtons || []).filter(function(b){ return b.is_active !== false; });
+    if(!btns.length){
+      btns = [{label:"Rhythm check", action:"log", color:"blue"},
+              {label:"Shock delivered", action:"shock", color:"red"},
+              {label:"Epinephrine", action:"epi", color:"amber"},
+              {label:"Compressor change", action:"log", color:""}];
+    }
+    $("cprButtons").innerHTML = btns.map(function(b){
+      return '<button class="cbtn ' + esc(b.color || "") + ' js-cprbtn" '
+        + 'data-l="'+esc(b.label)+'" data-a="'+esc(b.action||"log")+'"'
+        + (started ? '' : ' disabled') + '>' + esc(b.label) + '</button>';
+    }).join("");
+
+    tickCpr();
+    renderLog();
+  }
+
+  function renderLog(){
+    if(!cpr.events.length){
+      $("cprLog").innerHTML = '<div class="empty" style="padding:24px">'
+        + (cpr.hasStarted ? "Tap a button as things happen." : "Press Start code to begin.")
+        + '</div>';
+      return;
+    }
+    $("cprLog").innerHTML = cpr.events.slice().reverse().map(function(e){
+      return '<div class="lrow"><span class="t">'+mmss(e.at)+'</span>'
+        + '<span class="e">'+esc(e.label)+(e.detail ? " · " + esc(e.detail) : "")+'</span></div>';
+    }).join("");
+  }
+
+  /* 110 beats a minute, the rate you compress at */
+  function toggleMetronome(){
+    if(metronome){
+      clearInterval(metronome); metronome = null; cpr.metronome = false;
+    } else {
+      try{
+        var Ctx = window.AudioContext || window.webkitAudioContext;
+        var ctx = new Ctx();
+        metronome = setInterval(function(){
+          var o = ctx.createOscillator(), g = ctx.createGain();
+          o.frequency.value = 880; o.connect(g); g.connect(ctx.destination);
+          g.gain.setValueAtTime(0.28, ctx.currentTime);
+          g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.06);
+          o.start(); o.stop(ctx.currentTime + 0.07);
+        }, 545);
+        cpr.metronome = true;
+      }catch(e){ cpr.metronome = false; }
+    }
+    saveCode(); renderCpr();
+  }
+
+  $("cprScreen").addEventListener("click", function(e){
+    var c = e.target.closest && e.target.closest(".js-cpr");
+    if(c){
+      var a = c.getAttribute("data-a");
+      if(a === "start"){
+        cpr.startedAt = nowSec(); cpr.running = true; cpr.hasStarted = true;
+        cpr.cycleStart = nowSec(); cpr.cycleNo = 1;
+        logEvent("Compressions started");
+        startTick(); renderCpr(); saveCode();
+      }
+      else if(a === "pause"){
+        cpr.elapsed = codeSeconds(); cpr.running = false; cpr.startedAt = null;
+        clearInterval(cprTick);
+        logEvent("Paused"); renderCpr(); saveCode();
+      }
+      else if(a === "resume"){
+        cpr.startedAt = nowSec(); cpr.running = true;
+        logEvent("Resumed"); startTick(); renderCpr(); saveCode();
+      }
+      else if(a === "training"){ cpr.training = !cpr.training; saveCode(); renderCpr(); }
+      else if(a === "metronome"){ toggleMetronome(); }
+      else if(a === "save"){ saveCodeLog(); }
+      return;
+    }
+
+    var b = e.target.closest && e.target.closest(".js-cprbtn");
+    if(b){
+      var label = b.getAttribute("data-l"), act = b.getAttribute("data-a");
+      if(act === "shock"){ cpr.shocks++; }
+      if(act === "epi"){ cpr.epis++; cpr.lastEpi = nowSec(); }
+      if(act === "log" && /rhythm|pulse/i.test(label)){
+        cpr.cycleNo++; cpr.cycleStart = nowSec();
+      }
+      logEvent(label);
+      saveCode(); tickCpr();
+    }
+  });
+
+  function saveCodeLog(){
+    var total = codeSeconds();
+    if(!confirm("Save this code log and clear the screen?")) return;
+
+    var row = {
+      org_id: org.org_id, user_id: me ? me.user_id : null,
+      client_uuid: cpr.id,
+      mode: cpr.training ? "Training" : "Real",
+      started_at: new Date(Date.now() - total*1000).toISOString(),
+      duration_seconds: total,
+      shocks: cpr.shocks, epis: cpr.epis, cycles: cpr.cycleNo,
+      log_text: cpr.events.map(function(e){
+        return mmss(e.at) + "  " + e.label + (e.detail ? " · " + e.detail : "");
+      }).join("\n"),
+      events: cpr.events
+    };
+
+    // keep it on the phone first: a code must never be lost to a dead signal
+    var queue = get("hz_cpr_queue") || [];
+    queue.push(row); put("hz_cpr_queue", queue);
+    clearInterval(cprTick);
+    if(metronome){ clearInterval(metronome); metronome = null; }
+    cpr = newCode(); saveCode(); renderCpr();
+    flushCodes(true);
+  }
+
+  function flushCodes(tellMe){
+    var queue = get("hz_cpr_queue") || [];
+    if(!queue.length){ if(tellMe) alert("Saved."); return; }
+    var row = queue[0];
+    db.from("code_logs").upsert(row, { onConflict:"org_id,client_uuid" }).then(function(r){
+      if(r.error) throw r.error;
+      queue.shift(); put("hz_cpr_queue", queue);
+      if(queue.length) return flushCodes(false);
+      if(tellMe) alert("Saved and sent.");
+    }).catch(function(){
+      if(tellMe) alert("Saved on this phone. It will be sent when you have signal.");
+    });
+  }
+
+  /* =============== settings =============== */
+  function openSettings(){
+    chrome("Settings", { screen:"settings" });
+    hideAll(); show($("setScreen"), true);
+    $("setBody").innerHTML = '<div class="empty">Loading\u2026</div>';
+
+    db.from("member_devices")
+      .select("id,device_label,platform,last_seen_at,trusted_until,revoked_at")
+      .eq("org_id", org.org_id).is("revoked_at", null)
+      .order("last_seen_at", { ascending:false })
+      .then(function(r){
+        var devices = r.data || [];
+        var thisKey = get("hz_device_key");
+
+        $("setBody").innerHTML =
+          '<div class="grp"><h3>You</h3>'
+          + '<div class="srow"><label>Name</label>'
+          +   '<input id="st_name" value="'+esc((me && me.display_name) || "")+'"></div>'
+          + '<div class="srow"><label>Phone</label>'
+          +   '<input id="st_phone" inputmode="tel" value="'+esc(myPhone || "")+'"></div>'
+          + '<div class="srow"><label>Unit</label><div class="val">'
+          +   esc((me && me.unit_number) || "\u2014") + '</div></div>'
+          + '<div class="srow"><label>Role</label><div class="val">'
+          +   esc((me && me.role) || "\u2014") + '</div></div>'
+          + '<button id="st_save" class="nbtn">Save</button></div>'
+
+          + '<div class="grp"><h3>Organization</h3>'
+          + '<div class="srow"><label>You are signed in to</label>'
+          +   '<div class="val">'+esc(org.name)+'</div></div>'
+          + '<div class="srow"><label>Organization code</label>'
+          +   '<div class="val">'+esc(org.code)+'</div></div>'
+          + '<button id="st_changeorg" class="nbtn sec">Change organization</button></div>'
+
+          + '<div class="grp"><h3>Signed-in devices</h3>'
+          + (devices.length
+              ? devices.map(function(d){
+                  return '<div class="dev"><span class="who"><b>'
+                    + esc(d.device_label || d.platform || "Device") + '</b>'
+                    + '<span class="sub2">Last used '
+                    + esc((d.last_seen_at||"").slice(0,10)) + '</span></span>'
+                    + '<button class="tiny js-revoke" data-id="'+d.id+'">Sign out</button></div>';
+                }).join("")
+              : '<div class="empty" style="padding:20px">No other devices.</div>')
+          + '<p class="notice" style="margin-top:10px">Lost a phone? Sign it out here and it '
+          + 'loses access straight away.</p></div>'
+
+          + '<div class="grp"><h3>This app</h3>'
+          + '<div class="srow"><label>Version</label><div class="val">'+VERSION+'</div></div>'
+          + '<button id="st_signout" class="nbtn sec">Sign out of this device</button></div>';
+      }).catch(function(){
+        $("setBody").innerHTML = '<div class="empty">Could not load settings.</div>';
+      });
+  }
+
+  $("setScreen").addEventListener("click", function(e){
+    var t = e.target;
+    if(t.id === "st_save"){
+      var nm = $("st_name").value.trim(), ph = $("st_phone").value.trim();
+      Promise.all([
+        db.from("profiles").update({ phone: ph || null }).eq("id", me.user_id),
+        db.from("memberships").update({ display_name: nm || null })
+          .eq("org_id", org.org_id).eq("user_id", me.user_id)
+      ]).then(function(){
+        if(me) me.display_name = nm;
+        myPhone = ph;
+        t.textContent = "Saved";
+        setTimeout(function(){ t.textContent = "Save"; }, 1500);
+      }).catch(function(){ alert("Could not save. Check your connection."); });
+      return;
+    }
+    if(t.id === "st_changeorg"){ changeOrg(); return; }
+    if(t.id === "st_signout"){
+      db.auth.signOut().then(function(){ location.reload(); });
+      return;
+    }
+    var rv = t.closest && t.closest(".js-revoke");
+    if(rv){
+      if(!confirm("Sign that device out?")) return;
+      db.rpc("revoke_device", { p_device: rv.getAttribute("data-id"),
+                                p_reason: "Signed out by the member" })
+        .then(function(){ openSettings(); })
+        .catch(function(){ alert("Could not sign that device out."); });
+    }
+  });
+
   /* =============== protocols ===============
      Search finds the words; the page image is what you read. Exactly the
      way the printed book looks, because it IS the page. */
@@ -986,64 +1390,75 @@
 
     if(q.length < 2){ el.innerHTML = '<div class="empty">Keep typing\u2026</div>'; return; }
 
-    el.innerHTML = '<div class="empty">Searching\u2026</div>';
+    /* Searching happens here on the phone, not on the server. That makes it
+       instant, lets it match part of a word as you type ("zofr" finds
+       Zofran), and means it still works with no signal. */
+    var pages = protoPages.filter(function(p){ return p.set_id === set.id; });
+    if(!pages.length){
+      el.innerHTML = '<div class="empty">The pages have not downloaded yet.<br>'
+        + 'Open this once with a connection and they will be here from then on.</div>';
+      return;
+    }
 
-    db.from("protocol_pages")
-      .select("page_number,page_label,body_text")
-      .eq("set_id", set.id)
-      .textSearch("search_tsv", q, { type:"websearch", config:"english" })
-      .order("page_number")
-      .limit(40)
-      .then(function(r){
-        if(r.error){
-          // fall back to a plain contains search if the phrasing upsets the index
-          return db.from("protocol_pages")
-            .select("page_number,page_label,body_text")
-            .eq("set_id", set.id)
-            .ilike("body_text", "%" + q + "%")
-            .order("page_number").limit(40);
-        }
-        return r;
-      })
-      .then(function(r){
-        if(r.error) throw r.error;
-        var rows = r.data || [];
-        if(!rows.length){
-          el.innerHTML = '<div class="empty">Nothing found for \u201C'+esc(q)+'\u201D.</div>';
-          return;
-        }
-        el.innerHTML = '<div class="psec"><h3>'+rows.length
-          + (rows.length === 1 ? ' page' : ' pages') + '</h3>'
-          + rows.map(function(p){
-              return '<button class="pitem js-page" data-p="'+p.page_number+'">'
-                + '<span class="pg">'+esc(p.page_label || p.page_number)+'</span>'
-                + '<span><b>Page '+p.page_number+'</b>'
-                + '<span class="snip">'+snippet(p.body_text, q)+'</span></span></button>';
-            }).join("") + '</div>';
-      })
-      .catch(function(){
-        el.innerHTML = '<div class="empty">Search needs a connection.<br>'
-          + 'You can still open the book and turn pages.</div>';
+    var terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    var hits = [];
+    pages.forEach(function(p){
+      var hay = (p.body_text || "").toLowerCase();
+      var score = 0, ok = true;
+      for(var i=0;i<terms.length;i++){
+        var at = hay.indexOf(terms[i]);
+        if(at < 0){ ok = false; break; }
+        // a word that starts with what you typed beats one that merely contains it
+        var starts = at === 0 || /[^a-z0-9]/.test(hay.charAt(at - 1));
+        score += starts ? 10 : 3;
+        if(at < 400) score += 2;      // near the top of the page is usually the heading
+      }
+      if(ok) hits.push({ p:p, score:score });
+    });
+
+    if(!hits.length){
+      el.innerHTML = '<div class="empty">Nothing found for \u201C'+esc(q)+'\u201D.</div>';
+      return;
+    }
+
+    hits.sort(function(a,b){
+      return b.score - a.score || a.p.page_number - b.p.page_number;
+    });
+
+    var toc = protoToc.filter(function(t){ return t.set_id === set.id; });
+    function headingFor(n){
+      var best = null;
+      toc.forEach(function(t){
+        if(t.page_number <= n && (!best || t.page_number > best.page_number)) best = t;
       });
+      return best ? best.name : null;
+    }
+
+    el.innerHTML = '<div class="psec"><h3>'+hits.length
+      + (hits.length === 1 ? ' page' : ' pages') + '</h3>'
+      + hits.slice(0, 60).map(function(h){
+          var head = headingFor(h.p.page_number);
+          return '<button class="pitem js-page" data-p="'+h.p.page_number+'">'
+            + '<span class="pg">'+esc(h.p.page_label || h.p.page_number)+'</span>'
+            + '<span><b>'+esc(head || ("Page " + h.p.page_number))+'</b>'
+            + '<span class="snip">'+snippet(h.p.body_text, q)+'</span></span></button>';
+        }).join("") + '</div>';
   }
 
   /* a short piece of the page around the first match, with it highlighted */
   function snippet(text, q){
     if(!text) return "";
-    var words = q.split(/\s+/).filter(function(w){ return w.length > 2; });
-    var lower = text.toLowerCase(), at = -1, hit = "";
-    for(var i=0;i<words.length && at<0;i++){
-      at = lower.indexOf(words[i].toLowerCase());
-      if(at > -1) hit = words[i];
-    }
+    var terms = q.toLowerCase().split(/\s+/).filter(function(w){ return w.length > 1; });
+    var lower = text.toLowerCase(), at = -1;
+    for(var i=0;i<terms.length && at<0;i++) at = lower.indexOf(terms[i]);
     if(at < 0) return esc(text.slice(0, 110)) + "\u2026";
-    var start = Math.max(0, at - 45);
-    var piece = text.slice(start, start + 150);
-    var out = esc(piece);
-    if(hit){
-      out = out.replace(new RegExp("(" + hit.replace(/[.*+?^${}()|[\]\\]/g,"\\$&") + ")", "ig"),
+
+    var start = Math.max(0, at - 50);
+    var out = esc(text.slice(start, start + 160));
+    terms.forEach(function(t){
+      out = out.replace(new RegExp("(" + t.replace(/[.*+?^${}()|[\]\\]/g,"\\$&") + ")", "ig"),
                         "<mark>$1</mark>");
-    }
+    });
     return (start > 0 ? "\u2026" : "") + out + "\u2026";
   }
 
@@ -1249,10 +1664,14 @@
     }
   });
 
+  var typing = null;
   $("search").addEventListener("input", function(){
-    if(screen === "protocols") renderProtocols();
-    else if(screen === "directory") renderDirectory();
-    else renderHospitals();
+    clearTimeout(typing);
+    typing = setTimeout(function(){
+      if(screen === "protocols") renderProtocols();
+      else if(screen === "directory") renderDirectory();
+      else renderHospitals();
+    }, 90);
   });
   window.addEventListener("online",  function(){ if(screen==="hospitals") renderHospitals(); else renderHome(); });
   window.addEventListener("offline", function(){ if(screen==="hospitals") renderHospitals(); else renderHome(); });
