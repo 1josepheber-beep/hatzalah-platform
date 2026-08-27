@@ -3630,7 +3630,7 @@
   $("bioOfferNo").addEventListener("click",function(){ $("biooffer").classList.add("hidden"); enter(); });
   function doSignout(){
     if(confirm("Sign out on this device? You'll need your password to get back in.")){
-      localStorage.removeItem(LS);bioClear();localStorage.removeItem("hoh_unlock_until");clearGTok();location.reload();}
+      localStorage.removeItem(LS);bioClear();localStorage.removeItem("hoh_unlock_until");clearGTok();try{SB.auth.signOut();}catch(e){}setTimeout(function(){location.reload();},250);}
   }
   $("signout").addEventListener("click",doSignout);
 
