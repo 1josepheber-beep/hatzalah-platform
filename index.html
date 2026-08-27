@@ -1386,7 +1386,8 @@
            if the roster carries their email, otherwise waiting for an
            administrator to approve them. */
         if(!m && !tried){
-          return SB.rpc("claim_my_place").catch(function(){ return null; })
+          return Promise.resolve(SB.rpc("claim_my_place"))
+            .then(function(c){ return c; }, function(){ return null; })
             .then(function(c){
               if(c && c.data && c.data.length) return sbLoadMe(true);
               return SB.rpc("join_org", { p_code: ORG.code }).then(function(j){
