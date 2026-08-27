@@ -97,6 +97,22 @@
   .warn{background:#FFF8E6;border:1px solid #E8CE86;color:#6B520C;
     padding:10px 12px;border-radius:9px;font-size:13.5px;margin-bottom:13px}
   .empty{text-align:center;color:var(--muted);padding:30px}
+  .brandgrid{display:grid;grid-template-columns:1fr 300px;gap:22px}
+  @media (max-width:920px){ .brandgrid{grid-template-columns:1fr} }
+  .phone{border:1px solid var(--line);border-radius:20px;overflow:hidden;background:#fff;
+    box-shadow:0 6px 22px rgba(16,24,40,.09)}
+  .phone-top{height:46px}
+  .phone-body{padding:20px 18px 24px;text-align:center}
+  .phone-logo{width:74px;height:74px;object-fit:contain;margin:-46px auto 12px;display:block;
+    background:#fff;border-radius:16px;padding:7px;box-shadow:0 2px 10px rgba(16,24,40,.14)}
+  .phone-logo.placeholder{display:flex;align-items:center;justify-content:center;
+    font-size:10.5px;color:#9AA4B2;border:1px dashed var(--line);box-shadow:none}
+  .phone-title{font-weight:800;font-size:16px;color:var(--ink)}
+  .phone-sub{font-size:12.5px;color:var(--muted);margin-top:3px}
+  .phone-field{margin-top:11px;border:1px solid var(--line);border-radius:9px;padding:10px;
+    font-size:12.5px;color:#9AA4B2;text-align:left}
+  .phone-btn{margin-top:13px;border-radius:9px;padding:11px;font-weight:700;font-size:13.5px}
+  .phone-link{margin-top:11px;font-size:12px}
   .savebar{position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:70;
     background:#12161C;color:#fff;padding:11px 14px;border-radius:12px;display:flex;
     align-items:center;gap:12px;box-shadow:0 8px 30px rgba(0,0,0,.28);font-size:14px}
@@ -2958,30 +2974,83 @@
       + 'printed cards will not break.</div>'
       + '<div class="grid2">'
       +   '<div class="f"><label>Code</label><input id="s_code" value="'+esc(o.code)+'"></div>'
-      +   '<div class="f"><label>Organization name</label><input id="s_name" value="'+esc(o.name)+'"></div>'
+      +   '<div class="f"><label>Organization name</label>'
+      +     '<input id="s_name" value="'+esc(o.name)+'"></div>'
       + '</div></div>'
 
+      /* ---- everything people see before they sign in ---- */
       + '<div class="card"><h2>Appearance</h2>'
-      + '<p class="hint">Shown on this organization\u2019s login page and home screen icon.</p>'
-      + '<div class="grid2">'
-      +   '<div class="f"><label>Home screen name (keep it short)</label>'
-      +     '<input id="s_appname" value="'+esc(o.app_name||"")+'"></div>'
-      +   '<div class="f"><label>Brand colour</label>'
-      +     '<input id="s_brand" type="color" value="'+esc(o.brand_primary||"#143D75")+'" style="height:44px"></div>'
-      +   '<div class="f" style="grid-column:1/-1"><label>Login page subtitle</label>'
-      +     '<input id="s_sub" value="'+esc(o.login_subtext||"")+'"></div>'
-      + '</div></div>'
+      + '<p class="hint">What people see before they sign in. The preview follows what you type; '
+      + 'a logo or icon saves as soon as you choose it.</p>'
+      + '<div class="brandgrid"><div>'
+      +   '<div class="f"><label>Logo <span class="small">above the sign-in box</span></label>'
+      +     '<div class="row">'
+      +       '<label class="btn" style="cursor:pointer">Choose an image'
+      +         '<input type="file" id="s_logofile" accept="image/*" style="display:none"></label>'
+      +       (o.logo_path ? '<button id="s_logoclear" class="btn danger">Remove</button>' : '')
+      +     '</div>'
+      +     '<p class="hint" style="margin:6px 0 0">A transparent PNG looks best, roughly square, '
+      +     'at least 200 pixels.</p></div>'
+      +   '<div class="f"><label>Name on the sign-in screen</label>'
+      +     '<input id="s_appname" value="'+esc(o.app_name||o.name||"")+'"></div>'
+      +   '<div class="f"><label>Line underneath</label>'
+      +     '<input id="s_sub" value="'+esc(o.login_subtext||"")+'" placeholder="Members only"></div>'
+      +   '<div class="grid2">'
+      +     '<div class="f"><label>Main colour</label><div class="row">'
+      +       '<input type="color" id="s_brandpick" value="'+esc(o.brand_primary||"#143D75")+'" '
+      +       'style="width:52px;padding:2px">'
+      +       '<input id="s_brand" value="'+esc(o.brand_primary||"#143D75")+'" style="flex:1">'
+      +     '</div></div>'
+      +     '<div class="f"><label>Text on that colour</label><div class="row">'
+      +       '<input type="color" id="s_onbrandpick" value="'+esc(o.brand_on_primary||"#ffffff")+'" '
+      +       'style="width:52px;padding:2px">'
+      +       '<input id="s_onbrand" value="'+esc(o.brand_on_primary||"#ffffff")+'" style="flex:1">'
+      +     '</div></div>'
+      +   '</div>'
+      +   '<div class="f"><label>Home screen icon '
+      +     '<span class="small">when someone installs the app</span></label><div class="row">'
+      +     '<label class="btn" style="cursor:pointer">Choose an icon'
+      +       '<input type="file" id="s_iconfile" accept="image/png" style="display:none"></label>'
+      +     (o.icon_512_path ? '<img src="'+esc(o.icon_512_path)+'" alt="" style="width:38px;'
+      +        'height:38px;border-radius:9px;border:1px solid var(--line)">' : '')
+      +   '</div><p class="hint" style="margin:6px 0 0">One square PNG. Both sizes a phone needs '
+      +   'are made for you.</p></div>'
+      + '</div><div>'
+      +   '<div class="small" style="margin-bottom:7px">How the sign-in screen will look</div>'
+      +   '<div class="phone" id="s_preview"></div>'
+      + '</div></div></div>'
 
       + '<div class="card"><h2>Phone numbers</h2>'
       + '<div class="grid2">'
-      +   '<div class="f"><label>Dispatch</label><input id="s_dispatch" value="'+esc(o.dispatch_phone||"")+'"></div>'
-      +   '<div class="f"><label>Medical control</label><input id="s_medcon" value="'+esc(o.medical_control_phone||"")+'"></div>'
+      +   '<div class="f"><label>Dispatch</label>'
+      +     '<input id="s_dispatch" value="'+esc(o.dispatch_phone||"")+'"></div>'
+      +   '<div class="f"><label>Medical control</label>'
+      +     '<input id="s_medcon" value="'+esc(o.medical_control_phone||"")+'"></div>'
       + '</div></div>'
+
+      + '<div class="card"><h2>File uploader</h2>'
+      + '<p class="hint">Where members are sent to hand in a document. Houston uses Egnyte; '
+      + 'another organization might use Dropbox, SharePoint or a form. Leave it blank to hide '
+      + 'the uploader.</p>'
+      + '<div class="f"><label>Upload link</label>'
+      +   '<input id="s_upload" value="'+esc(o.upload_url||"")+'" placeholder="https://\u2026"></div>'
+      + '</div>'
+
+      + '<div class="card"><h2>Map key</h2>'
+      + '<p class="hint">The dispatcher map is Google\u2019s, and Google bills whoever owns the '
+      + 'key. Each organization brings its own so nobody pays for anyone else\u2019s usage.</p>'
+      + '<div class="warn">Restrict the key to this app\u2019s web address in Google Cloud Console '
+      + '(Credentials \u2192 the key \u2192 Application restrictions \u2192 Websites). An unrestricted '
+      + 'key can be copied and spent by anyone.</div>'
+      + '<div class="f"><label>Google Maps browser key</label>'
+      +   '<input id="s_mapkey" value="'+esc(o.maps_api_key||"")+'" '
+      +   'placeholder="leave blank to hide the map"></div></div>'
 
       + '<div class="card"><h2>Who can sign in</h2>'
       + '<div class="grid2">'
       +   '<div class="f"><label>Email domain</label>'
-      +     '<input id="s_domain" value="'+esc((o.email_domains||[])[0]||"")+'" placeholder="houstonhatzalah.org"></div>'
+      +     '<input id="s_domain" value="'+esc((o.email_domains||[])[0]||"")+'" '
+      +     'placeholder="houstonhatzalah.org"></div>'
       +   '<div class="f"><label>Sign-up rule</label><select id="s_auth">'
       +     ['domain_pending','domain_open','invite_only'].map(function(m){
             var label = { domain_pending:"Org email, admin approves",
@@ -3006,6 +3075,7 @@
       + '<button id="s_save" class="btn primary">Save changes</button>';
 
     $("s_save").addEventListener("click", saveSettings);
+    wireAppearance();
   }
 
   function saveSettings(){
@@ -3042,6 +3112,126 @@
       $("orgPick").value = orgId;
       toast("Saved");
     }).catch(function(e){ b.disabled = false; oops(e); });
+  }
+
+  function paintBrandPreview(){
+    var box = $("s_preview");
+    if(!box) return;
+    var brand = ($("s_brand") && $("s_brand").value.trim()) || "#143D75";
+    var onBrand = ($("s_onbrand") && $("s_onbrand").value.trim()) || "#ffffff";
+    var title = ($("s_appname") && $("s_appname").value.trim()) || "Your organization";
+    var sub   = ($("s_sub") && $("s_sub").value.trim()) || "";
+    var logo  = BRAND_LOGO_PREVIEW || (org && org.logo_path) || "";
+
+    box.innerHTML =
+      '<div class="phone-top" style="background:'+esc(brand)+';color:'+esc(onBrand)+'"></div>'
+      + '<div class="phone-body">'
+      +   (logo ? '<img src="'+esc(logo)+'" alt="" class="phone-logo">'
+                : '<div class="phone-logo placeholder">no logo yet</div>')
+      +   '<div class="phone-title">'+esc(title)+'</div>'
+      +   (sub ? '<div class="phone-sub">'+esc(sub)+'</div>' : '')
+      +   '<div class="phone-field">Email</div>'
+      +   '<div class="phone-field">Password</div>'
+      +   '<div class="phone-btn" style="background:'+esc(brand)+';color:'+esc(onBrand)+'">'
+      +     'Sign in</div>'
+      +   '<div class="phone-link" style="color:'+esc(brand)+'">Forgot your password?</div>'
+      + '</div>';
+  }
+
+  var BRAND_LOGO_PREVIEW = null;
+
+  function wireAppearance(){
+    ["s_brand","s_onbrand","s_appname","s_sub"].forEach(function(id){
+      var el = $(id);
+      if(el) el.addEventListener("input", function(){
+        if(id === "s_brand" && $("s_brandpick")) $("s_brandpick").value = el.value;
+        if(id === "s_onbrand" && $("s_onbrandpick")) $("s_onbrandpick").value = el.value;
+        paintBrandPreview();
+      });
+    });
+    [["s_brandpick","s_brand"],["s_onbrandpick","s_onbrand"]].forEach(function(pair){
+      var pick = $(pair[0]);
+      if(pick) pick.addEventListener("input", function(){
+        $(pair[1]).value = pick.value; paintBrandPreview();
+      });
+    });
+
+    var lf = $("s_logofile");
+    if(lf) lf.addEventListener("change", function(e){
+      var f = e.target.files && e.target.files[0];
+      if(!f) return;
+      if(f.size > 2 * 1024 * 1024){ toast("Keep the logo under 2 MB."); return; }
+      var reader = new FileReader();
+      reader.onload = function(ev){ BRAND_LOGO_PREVIEW = ev.target.result; paintBrandPreview(); };
+      reader.readAsDataURL(f);
+
+      var path = orgId + "/brand/logo-" + Date.now().toString(36) + "-"
+               + f.name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+      toast("Uploading the logo\u2026");
+      db.storage.from("org-branding").upload(path, f, { upsert:true, contentType:f.type })
+        .then(function(r){
+          if(r.error) throw r.error;
+          var url = db.storage.from("org-branding").getPublicUrl(path).data.publicUrl;
+          return db.from("orgs").update({ logo_path: url }).eq("id", orgId);
+        })
+        .then(function(r){
+          if(r.error) throw r.error;
+          toast("Logo saved"); org.logo_path = null; renderSettings();
+        }).catch(oops);
+    });
+
+    var lc = $("s_logoclear");
+    if(lc) lc.addEventListener("click", function(){
+      if(!confirm("Remove the logo?")) return;
+      db.from("orgs").update({ logo_path: null }).eq("id", orgId).then(function(r){
+        if(r.error) return oops(r.error);
+        BRAND_LOGO_PREVIEW = null; toast("Logo removed"); renderSettings();
+      }).catch(oops);
+    });
+
+    /* One square PNG, resized to the two sizes a phone wants for its
+       home screen. Nobody should have to produce both by hand. */
+    var icf = $("s_iconfile");
+    if(icf) icf.addEventListener("change", function(e){
+      var f = e.target.files && e.target.files[0];
+      if(!f) return;
+      var img = new Image();
+      img.onload = function(){
+        var sizes = [[192, "icon_192_path"], [512, "icon_512_path"]];
+        var patch = {}, jobs = [];
+        sizes.forEach(function(sz){
+          var c = document.createElement("canvas");
+          c.width = c.height = sz[0];
+          var ctx = c.getContext("2d");
+          ctx.drawImage(img, 0, 0, sz[0], sz[0]);
+          jobs.push(new Promise(function(res, rej){
+            c.toBlob(function(blob){
+              if(!blob) return rej(new Error("Could not resize the icon."));
+              var path = orgId + "/brand/icon-" + sz[0] + "-" + Date.now().toString(36) + ".png";
+              db.storage.from("org-branding")
+                .upload(path, blob, { upsert:true, contentType:"image/png" })
+                .then(function(r){
+                  if(r.error) return rej(r.error);
+                  patch[sz[1]] = db.storage.from("org-branding")
+                    .getPublicUrl(path).data.publicUrl;
+                  res();
+                }).catch(rej);
+            }, "image/png");
+          }));
+        });
+        toast("Making both icon sizes\u2026");
+        Promise.all(jobs).then(function(){
+          return db.from("orgs").update(patch).eq("id", orgId);
+        }).then(function(r){
+          if(r.error) throw r.error;
+          toast("Icons saved"); renderSettings();
+        }).catch(oops);
+      };
+      img.onerror = function(){ toast("That image could not be read."); };
+      img.src = URL.createObjectURL(f);
+    });
+
+    paintBrandPreview();
   }
 
   /* ================= FEATURES ================= */
