@@ -178,6 +178,7 @@
   var $  = function(id){ return document.getElementById(id); };
 
   var isSuper = false, orgs = [], orgId = null, org = null;
+  var ROSTER_FILTER = "all", ROSTER_SEARCH = "";
   var TABS = ["members","hospitals","protocols","tiles","content","media","settings","features"];
 
   /* Remember where you were. Refreshing in the middle of data entry and
@@ -193,9 +194,14 @@
   }
   function writeState(){
     var h = "tab=" + tab + (orgId ? "&org=" + orgId : "");
-    if(location.hash.replace(/^#/,"") !== h){
-      history.replaceState(null, "", "#" + h);
-    }
+    /* Opening the file straight from disk, or an unusual browser, can refuse
+       this. Remembering where you were is a convenience and must never be
+       allowed to stop the page rendering. */
+    try{
+      if(location.hash.replace(/^#/,"") !== h){
+        history.replaceState(null, "", "#" + h);
+      }
+    }catch(e){}
     try{ localStorage.setItem("hzadmin_state", JSON.stringify({tab:tab, org:orgId})); }catch(e){}
   }
   function savedState(){
@@ -361,6 +367,41 @@
              +  'They signed in but were not on the roster. See the bottom of this page.</div>';
       }
 
+      var counts = { all: roster.length };
+      roster.forEach(function(x){ counts[x.role] = (counts[x.role]||0) + 1; });
+      badgeTypes.forEach(function(b){
+        counts["badge:"+b.name] = roster.filter(function(x){
+          return (x.badges||[]).indexOf(b.name) > -1; }).length;
+      });
+
+      var filters = [["all","Everyone"],["admin","Admins"],["dispatcher","Dispatchers"],
+                     ["member","Responders"],["guest","Guests"]]
+        .concat(badgeTypes.map(function(b){ return ["badge:"+b.name, b.name]; }));
+
+      html += '<div class="card" style="padding:12px 16px"><div class="row">'
+        + filters.map(function(f){
+            var n = counts[f[0]] || 0;
+            return '<button class="btn js-rfilter'+(ROSTER_FILTER===f[0]?" primary":"")+'" '
+              + 'data-f="'+esc(f[0])+'"'+(n?"":" disabled")+'>'
+              + esc(f[1]) + ' <span class="small">'+n+'</span></button>';
+          }).join("")
+        + '<input id="rsearch" placeholder="Search name or unit" value="'+esc(ROSTER_SEARCH)+'" '
+        + 'style="flex:1;min-width:170px;padding:9px 11px;border-radius:9px;border:1px solid var(--line)">'
+        + '</div></div>';
+
+      var shown = roster.filter(function(x){
+        if(ROSTER_FILTER !== "all"){
+          if(ROSTER_FILTER.indexOf("badge:") === 0){
+            if((x.badges||[]).indexOf(ROSTER_FILTER.slice(6)) < 0) return false;
+          } else if(x.role !== ROSTER_FILTER) return false;
+        }
+        if(ROSTER_SEARCH){
+          var hay = ((x.display_name||"")+" "+(x.unit_number||"")+" "+(x.email||"")).toLowerCase();
+          if(hay.indexOf(ROSTER_SEARCH.toLowerCase()) < 0) return false;
+        }
+        return true;
+      });
+
       html += '<div class="card"><h2>Roster</h2>'
         + '<p class="hint">'+roster.length+' people. '+signedIn+' have signed in at least once. '
         + 'Everyone else is set up and waiting for their first sign-in.</p>'
@@ -368,8 +409,11 @@
         + 'their row, they go straight into that unit with these settings. Get it wrong and they '
         + 'land in the waiting list instead.</p>';
 
-      if(!roster.length){
-        html += '<div class="empty">No roster yet. Import your Members sheet below.</div></div>';
+      if(!shown.length){
+        html += '<div class="empty">'
+          + (roster.length ? "Nobody matches that filter."
+                           : "No roster yet. Import your Members sheet below.")
+          + '</div></div>';
       } else {
         html += '<div class="scroller"><table><thead><tr>'
           + '<th style="width:76px">Unit</th><th>Name</th><th>Email</th>'
@@ -804,6 +848,842 @@
     }).catch(function(e){
       b.disabled = false; b.textContent = "Save contents";
       $("toc_out").innerHTML = '<div class="err">'+esc(e.message||"Could not save")+'</div>';
+    });
+  }
+
+  /* ================= HOSPITALS ================= */
+
+  var OUR_FIELDS = [
+    { key:"name",       label:"Hospital name", required:true,
+      aliases:["hospital name","name","hospital","facility","facility name"] },
+    { key:"phone_call", label:"Phone number",
+      aliases:["phone (call)","phone call","phone","main phone","telephone","tel","contact"] },
+    { key:"phone_red",  label:"Red phone",
+      aliases:["red phone","redphone","red","direct line","er phone"] },
+    { key:"address",    label:"Address",
+      aliases:["address (navigate)","address","street address","location","street"] },
+    { key:"door_code",  label:"Door code",
+      aliases:["door code","doorcode","door","entry code","keypad","access code"] },
+    { key:"lat",        label:"Latitude (ambulance bay)",  aliases:["latitude","lat"] },
+    { key:"lng",        label:"Longitude (ambulance bay)", aliases:["longitude","lng","long","lon"] }
+  ];
+  var SKIP_HEADERS = ["code","specialties (summary)","specialties","summary","notes"];
+  var IMP = null;
+
+  function norm(h){ return String(h||"").trim().toLowerCase(); }
+
+  function autoMap(headers, rows){
+    return headers.map(function(h, i){
+      var n = norm(h);
+      if(!n) return "ignore";
+      if(n === "hide") return "hide";
+      if(SKIP_HEADERS.indexOf(n) > -1) return "ignore";
+      for(var f=0; f<OUR_FIELDS.length; f++){
+        if(OUR_FIELDS[f].aliases.indexOf(n) > -1) return OUR_FIELDS[f].key;
+      }
+      var ticks = 0, filled = 0;
+      for(var r=0; r<rows.length; r++){
+        var v = String(rows[r][i] == null ? "" : rows[r][i]).trim().toUpperCase();
+        if(!v) continue;
+        filled++;
+        if(v === "X" || v === "YES" || v === "TRUE" || v === "1") ticks++;
+      }
+      if(filled && ticks === filled) return "specialty";
+      return "ignore";
+    });
+  }
+
+  function renderHospitals(){
+    var el = $("tab-hospitals");
+    el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
+
+    db.from("hospitals").select("*").eq("org_id", orgId).order("sort_order")
+      .then(function(r){
+        if(r.error) throw r.error;
+        var rows = r.data || [];
+        var gaps = rows.filter(function(h){ return !h.phone_call || !h.address; }).length;
+        var noCoords = rows.filter(function(h){ return !h.lat || !h.lng; }).length;
+
+        var html = '<div class="card"><h2>Import your hospital list</h2>'
+          + '<p class="hint">Upload a spreadsheet. If your headings differ from ours you can '
+          + 'match them up on the next step \u2014 no need to reformat anything.</p>'
+          + '<div class="steps">'
+          +   '<div class="step"><span class="n">1</span><div><b>Start from our template</b>'
+          +     '<div class="small">Optional. Already have a list? Skip to step 2.</div>'
+          +     '<button id="imp_tpl" class="btn" style="margin-top:8px">Download template (.csv)</button>'
+          +   '</div></div>'
+          +   '<div class="step"><span class="n">2</span><div><b>Upload your file</b>'
+          +     '<div class="small">Excel (.xlsx) or .csv</div>'
+          +     '<input id="imp_file" type="file" accept=".csv,.xlsx,.xls" style="margin-top:8px">'
+          +   '</div></div>'
+          + '</div><div id="imp_out"></div></div>'
+
+          + '<div class="card"><h2>Add a hospital</h2>'
+          + '<p class="hint">Only the name is required.</p>'
+          + '<div class="grid2">'
+          +   '<div class="f"><label>Name</label><input id="nh_name"></div>'
+          +   '<div class="f"><label>Phone</label><input id="nh_phone"></div>'
+          +   '<div class="f"><label>Red phone</label><input id="nh_red"></div>'
+          +   '<div class="f"><label>Door code</label><input id="nh_door"></div>'
+          +   '<div class="f" style="grid-column:1/-1"><label>Address</label><input id="nh_addr"></div>'
+          +   '<div class="f"><label>Latitude</label><input id="nh_lat" inputmode="decimal"></div>'
+          +   '<div class="f"><label>Longitude</label><input id="nh_lng" inputmode="decimal"></div>'
+          + '</div>'
+          + '<p class="hint" style="margin:0 0 12px">Coordinates point Navigate at the ambulance '
+          + 'bay instead of the front door. When set they win, and the address still shows.</p>'
+          + '<button id="nh_add" class="btn primary">Add hospital</button></div>';
+
+        html += '<div class="card"><h2>'+rows.length+' hospitals</h2>';
+        if(gaps) html += '<p class="hint">'+gaps+' are missing a phone number or an address.</p>';
+        if(noCoords) html += '<p class="hint">'+noCoords+' have no ambulance bay coordinates.</p>';
+
+        if(!rows.length){
+          html += '<div class="empty">No hospitals yet.</div></div>';
+          el.innerHTML = html; wireHospitalForm(); return;
+        }
+
+        html += '<div class="scroller"><table><thead><tr><th>Name</th><th>Phone</th><th>Door</th>'
+             +  '<th>Address</th><th>Ambulance bay</th><th></th></tr></thead><tbody>';
+        rows.forEach(function(h){
+          html += '<tr>'
+            + '<td><input class="js-h" data-id="'+h.id+'" data-f="name" value="'+esc(h.name)+'"></td>'
+            + '<td><input class="js-h" data-id="'+h.id+'" data-f="phone_call" value="'+esc(h.phone_call||"")+'" placeholder="\u2014"></td>'
+            + '<td><input class="js-h" data-id="'+h.id+'" data-f="door_code" value="'+esc(h.door_code||"")+'" placeholder="\u2014" style="width:90px"></td>'
+            + '<td><input class="js-h" data-id="'+h.id+'" data-f="address" value="'+esc(h.address||"")+'" placeholder="\u2014"></td>'
+            + '<td><div class="coords">'
+            +   '<input class="js-h" data-id="'+h.id+'" data-f="lat" value="'+esc(h.lat||"")+'" placeholder="lat" inputmode="decimal">'
+            +   '<input class="js-h" data-id="'+h.id+'" data-f="lng" value="'+esc(h.lng||"")+'" placeholder="lng" inputmode="decimal">'
+            + '</div></td>'
+            + '<td class="actions"><button class="xbtn js-hdel" data-id="'+h.id+'" '
+            +   'data-name="'+esc(h.name)+'" title="Delete">\u00D7</button></td></tr>';
+        });
+        html += '</tbody></table></div>'
+             +  '<p class="hint" style="margin-top:12px">Edits save when you click out of a box.</p></div>';
+        el.innerHTML = html;
+        wireHospitalForm();
+      }).catch(function(e){
+        el.innerHTML = '<div class="card"><div class="err">'+esc(e.message||"Could not load hospitals")+'</div></div>';
+      });
+  }
+
+  function wireHospitalForm(){
+    var tpl = $("imp_tpl");
+    if(tpl) tpl.addEventListener("click", downloadTemplate);
+    var f = $("imp_file");
+    if(f) f.addEventListener("change", function(e){
+      if(e.target.files && e.target.files[0]) readFile(e.target.files[0]);
+    });
+    var add = $("nh_add");
+    if(add) add.addEventListener("click", function(){
+      var name = $("nh_name").value.trim();
+      if(!name){ toast("A hospital needs a name."); return; }
+      add.disabled = true;
+      db.from("hospitals").insert({
+        org_id: orgId, name: name,
+        phone_call: $("nh_phone").value.trim() || null,
+        phone_red:  $("nh_red").value.trim()   || null,
+        door_code:  $("nh_door").value.trim()  || null,
+        address:    $("nh_addr").value.trim()  || null,
+        lat: parseFloat($("nh_lat").value) || null,
+        lng: parseFloat($("nh_lng").value) || null,
+        sort_order: 9999
+      }).then(function(r){
+        add.disabled = false;
+        if(r.error) return oops(r.error);
+        toast("Added " + name); renderHospitals();
+      }).catch(function(e){ add.disabled = false; oops(e); });
+    });
+  }
+
+  function downloadTemplate(){
+    var headers = ["Hospital Name","Phone (Call)","Red Phone","Address","Door Code",
+                   "Latitude","Longitude","Trauma","Stroke","Cardiac","Paediatric"];
+    var examples = [
+      ["Example General Hospital","713-555-1000","713-555-1911",
+       "100 Main Street, Yourtown","4412#","29.709600","-95.397100","X","X","X",""],
+      ["Example Children's Hospital","713-555-2000","",
+       "200 Second Street, Yourtown","","","","","","","X"]
+    ];
+    var csv = [headers].concat(examples).map(function(r){
+      return r.map(function(c){
+        return /[",\n]/.test(c) ? '"'+String(c).replace(/"/g,'""')+'"' : c;
+      }).join(",");
+    }).join("\r\n");
+    var blob = new Blob(["\ufeff" + csv], { type:"text/csv;charset=utf-8;" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "hospital-list-template.csv";
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    toast("Template downloaded");
+  }
+
+  function readFile(file){
+    $("imp_out").innerHTML = '<div class="card"><div class="empty">Reading '+esc(file.name)+'\u2026</div></div>';
+    var fr = new FileReader();
+    fr.onerror = function(){
+      $("imp_out").innerHTML = '<div class="err">Could not read that file.</div>';
+    };
+    fr.onload = function(e){
+      try{
+        var wb = XLSX.read(e.target.result, { type:"array" });
+        var grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],
+                     { header:1, blankrows:false, defval:"" });
+        if(!grid.length) throw new Error("That file looks empty.");
+        var headers = grid[0].map(function(h){ return String(h == null ? "" : h).trim(); });
+        var rows = grid.slice(1).filter(function(r){
+          return r.some(function(c){ return String(c == null ? "" : c).trim() !== ""; });
+        });
+        if(!rows.length) throw new Error("That file has headings but no rows.");
+        IMP = { headers:headers, rows:rows, mapping:autoMap(headers, rows) };
+        renderMapping();
+      }catch(err){
+        $("imp_out").innerHTML = '<div class="err">'+esc(err.message||"Could not understand that file.")
+          + ' Try saving it as .csv and uploading again.</div>';
+      }
+    };
+    fr.readAsArrayBuffer(file);
+  }
+
+  function renderMapping(){
+    var opts = function(sel){
+      var o = '<option value="ignore"'+(sel==="ignore"?" selected":"")+'>Do not import</option>'
+            + '<option value="specialty"'+(sel==="specialty"?" selected":"")+'>A specialty (X = has it)</option>'
+            + '<option value="hide"'+(sel==="hide"?" selected":"")+'>Hide row when marked X</option>';
+      OUR_FIELDS.forEach(function(f){
+        o += '<option value="'+f.key+'"'+(sel===f.key?" selected":"")+'>'+esc(f.label)+'</option>';
+      });
+      return o;
+    };
+    var hasName = IMP.mapping.indexOf("name") > -1;
+    var used = {};
+    IMP.mapping.forEach(function(m){ if(m !== "ignore" && m !== "specialty") used[m] = (used[m]||0)+1; });
+    var dupes = Object.keys(used).filter(function(k){ return used[k] > 1; });
+
+    var html = '<div class="card"><h2>Check the columns</h2>'
+      + '<p class="hint">We have guessed what each column means. Change anything wrong.</p>';
+    if(!hasName) html += '<div class="err">One column must be set to <b>Hospital name</b>.</div>';
+    if(dupes.length) html += '<div class="err">Two columns are set to the same thing.</div>';
+    html += '<div class="maprow"><b class="small">YOUR COLUMN</b><span></span><b class="small">MEANS</b></div>';
+    IMP.headers.forEach(function(h, i){
+      var sample = "";
+      for(var r=0; r<IMP.rows.length && !sample; r++){
+        sample = String(IMP.rows[r][i] == null ? "" : IMP.rows[r][i]).trim();
+      }
+      html += '<div class="maprow"><div class="yours">'+esc(h || "(no heading)")
+        + (sample ? '<div class="sample">e.g. '+esc(sample.slice(0,40))+'</div>' : '')
+        + '</div><span class="arrow">\u2192</span>'
+        + '<select class="js-map" data-i="'+i+'">'+opts(IMP.mapping[i])+'</select></div>';
+    });
+    html += '<div class="row" style="margin-top:16px">'
+      + '<button id="imp_preview" class="btn primary"'+((!hasName||dupes.length)?" disabled":"")+'>Preview import</button>'
+      + '<button id="imp_cancel" class="btn">Start over</button></div></div>';
+    $("imp_out").innerHTML = html;
+  }
+
+  function buildRows(){
+    var map = {}, specCols = [], hideCol = -1;
+    IMP.mapping.forEach(function(m, i){
+      if(m === "ignore") return;
+      if(m === "specialty"){ specCols.push({ i:i, label:IMP.headers[i] }); return; }
+      if(m === "hide"){ hideCol = i; return; }
+      map[m] = i;
+    });
+    var out = [], skipped = 0;
+    IMP.rows.forEach(function(cells, n){
+      var cell = function(i){
+        return i === undefined ? "" : String(cells[i] == null ? "" : cells[i]).trim();
+      };
+      if(hideCol > -1 && cell(hideCol).toUpperCase() === "X"){ skipped++; return; }
+      var name = cell(map.name);
+      if(!name){ skipped++; return; }
+      var specs = [];
+      specCols.forEach(function(sc){
+        var v = cell(sc.i).toUpperCase();
+        if(v === "X" || v === "YES" || v === "TRUE" || v === "1") specs.push(sc.label);
+      });
+      var lat = parseFloat(cell(map.lat)), lng = parseFloat(cell(map.lng));
+      out.push({ org_id: orgId, name: name,
+        phone_call: cell(map.phone_call) || null,
+        phone_red:  cell(map.phone_red)  || null,
+        address:    cell(map.address)    || null,
+        door_code:  cell(map.door_code)  || null,
+        lat: isNaN(lat) ? null : lat, lng: isNaN(lng) ? null : lng,
+        specialties: specs, sort_order: (n + 1) * 10 });
+    });
+    return { rows:out, skipped:skipped, specCols:specCols.map(function(c){ return c.label; }) };
+  }
+
+  function renderPreview(){
+    var b = buildRows();
+    if(!b.rows.length){
+      $("imp_out").innerHTML = '<div class="card"><div class="err">No usable rows.</div>'
+        + '<button id="imp_cancel" class="btn" style="margin-top:12px">Start over</button></div>';
+      return;
+    }
+    IMP.ready = b.rows;
+    var coords = b.rows.filter(function(x){ return x.lat && x.lng; }).length;
+    var phones = b.rows.filter(function(x){ return x.phone_call; }).length;
+    $("imp_out").innerHTML = '<div class="card"><h2>Ready to import</h2>'
+      + '<div class="warn"><b>'+b.rows.length+' hospitals.</b><br>'
+      +   phones+' with a phone number, '+coords+' with ambulance bay coordinates.'
+      +   (b.specCols.length ? '<br>Specialties: '+esc(b.specCols.join(", ")) : '')
+      +   (b.skipped ? '<br>'+b.skipped+' rows left out.' : '') + '</div>'
+      + '<div class="scroller"><table><thead><tr><th>Name</th><th>Phone</th><th>Door</th>'
+      +   '<th>Bay coords</th><th>Specialties</th></tr></thead><tbody>'
+      + b.rows.slice(0,6).map(function(x){
+          return '<tr><td>'+esc(x.name)+'</td><td>'+esc(x.phone_call||"\u2014")+'</td>'
+            + '<td>'+esc(x.door_code||"\u2014")+'</td><td>'+(x.lat&&x.lng?"yes":"\u2014")+'</td>'
+            + '<td class="small">'+esc(x.specialties.join(", ")||"\u2014")+'</td></tr>';
+        }).join("")
+      + '</tbody></table></div>'
+      + '<label class="row" style="margin:14px 0"><input type="checkbox" id="imp_replace" '
+      +   'style="width:auto"> <span>Replace the current list instead of adding to it</span></label>'
+      + '<div class="row"><button id="imp_go" class="btn primary">Import '+b.rows.length+' hospitals</button>'
+      + '<button id="imp_back" class="btn">Back to columns</button></div></div>';
+  }
+
+  function doImport(){
+    var go = $("imp_go");
+    var replace = $("imp_replace") && $("imp_replace").checked;
+    if(replace && !confirm("This deletes every hospital in this organization, then imports "
+        + IMP.ready.length + ". Continue?")) return;
+    go.disabled = true; go.textContent = "Importing\u2026";
+    var step = replace ? db.from("hospitals").delete().eq("org_id", orgId)
+                       : Promise.resolve({ error:null });
+    step.then(function(d){
+      if(d && d.error) throw d.error;
+      return db.from("hospitals").insert(IMP.ready);
+    }).then(function(r){
+      if(r.error) throw r.error;
+      var names = {};
+      IMP.ready.forEach(function(x){ x.specialties.forEach(function(sp){ names[sp] = 1; }); });
+      var list = Object.keys(names);
+      if(!list.length) return { error:null };
+      return db.from("hospital_specialties").upsert(
+        list.map(function(n, i){
+          return { org_id:orgId, name:n, label:n, is_key:true, sort_order:(i+1)*10 };
+        }), { onConflict:"org_id,name", ignoreDuplicates:true });
+    }).then(function(r){
+      if(r && r.error) throw r.error;
+      toast("Imported " + IMP.ready.length + " hospitals");
+      IMP = null; renderHospitals();
+    }).catch(function(e){
+      go.disabled = false; go.textContent = "Import";
+      $("imp_out").innerHTML = '<div class="card"><div class="err">'+esc(e.message||"Import failed")+'</div>'
+        + '<button id="imp_cancel" class="btn" style="margin-top:12px">Start over</button></div>';
+    });
+  }
+
+
+  /* ================= PROTOCOLS ================= */
+
+  var PDF_SCALE_WIDTH = 1400, PDF_QUALITY = 0.82;
+
+  function renderProtocols(){
+    var el = $("tab-protocols");
+    el.innerHTML = '<div class="card"><div class="empty">Loading\u2026</div></div>';
+
+    db.from("protocol_sets").select("*").eq("org_id", orgId)
+      .order("created_at", { ascending:false })
+      .then(function(r){
+        if(r.error) throw r.error;
+        var sets = r.data || [];
+        var html = '<div class="card"><h2>Upload a protocol book</h2>'
+          + '<p class="hint">Choose the PDF your medical director issued. Every page becomes a '
+          + 'readable image and the words behind it become searchable. This happens on this '
+          + 'computer, so a long book takes a few minutes and the tab must stay open.</p>'
+          + '<div class="grid2">'
+          +   '<div class="f"><label>What to call it</label><input id="pr_name" '
+          +     'placeholder="2026 Patient Care Guidelines"></div>'
+          +   '<div class="f"><label>Version (optional)</label><input id="pr_version"></div>'
+          + '</div>'
+          + '<div class="f"><label>PDF file</label><input id="pr_file" type="file" accept="application/pdf"></div>'
+          + '<button id="pr_go" class="btn primary">Upload and process</button>'
+          + '<div id="pr_progress" class="hidden" style="margin-top:14px">'
+          +   '<div class="bar-outer"><div id="pr_bar" class="bar-inner"></div></div>'
+          +   '<div id="pr_status" class="mono">Starting\u2026</div></div>'
+          + '<div id="pr_err"></div></div>';
+
+        html += '<div class="card"><h2>Protocol books</h2>';
+        if(!sets.length){
+          html += '<div class="empty">Nothing uploaded yet.</div></div>';
+        } else {
+          html += '<div class="scroller"><table><thead><tr><th>Name</th><th>Version</th>'
+               +  '<th>Pages</th><th>Members can see it</th><th></th></tr></thead><tbody>';
+          sets.forEach(function(x){
+            html += '<tr><td><b>'+esc(x.name)+'</b></td><td>'+esc(x.version||"\u2014")+'</td>'
+              + '<td>'+(x.page_count||0)+'</td>'
+              + '<td><button class="toggle js-pubset" data-id="'+x.id+'" aria-pressed="'
+              +   (x.is_published?"true":"false")+'"><span></span></button></td>'
+              + '<td class="actions">'
+              +   '<button class="btn js-toc" data-id="'+x.id+'" data-name="'+esc(x.name)+'" '
+              +     'style="padding:7px 11px;font-size:13px">Contents</button> '
+              +   '<button class="xbtn js-delset" data-id="'+x.id+'" data-name="'+esc(x.name)+'" '
+              +     'title="Delete">\u00D7</button></td></tr>';
+          });
+          html += '</tbody></table></div>'
+               +  '<p class="hint" style="margin-top:12px">A book stays hidden from members until '
+               +  'you switch it on.</p></div>';
+        }
+        el.innerHTML = html;
+        wireProtocolForm();
+      }).catch(function(e){
+        el.innerHTML = '<div class="card"><div class="err">'+esc(e.message||"Could not load protocols")+'</div></div>';
+      });
+  }
+
+  function setProgress(done, total, msg){
+    $("pr_bar").style.width = total ? Math.round(done/total*100)+"%" : "0%";
+    $("pr_status").textContent = msg;
+  }
+
+  function wireProtocolForm(){
+    var go = $("pr_go");
+    if(!go) return;
+    go.addEventListener("click", function(){
+      var f = $("pr_file").files && $("pr_file").files[0];
+      var name = $("pr_name").value.trim();
+      $("pr_err").innerHTML = "";
+      if(!f){ toast("Choose a PDF first."); return; }
+      if(!name){ toast("Give the book a name."); return; }
+      processPdf(f, name, $("pr_version").value.trim() || null);
+    });
+  }
+
+  function processPdf(file, name, version){
+    var go = $("pr_go");
+    go.disabled = true;
+    $("pr_progress").classList.remove("hidden");
+    setProgress(0, 1, "Opening the PDF\u2026");
+
+    var setId = null, pdf = null, total = 0;
+    var reader = new FileReader();
+    reader.onerror = function(){ stop("Could not read that file."); };
+    reader.onload = function(e){
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+      pdfjsLib.getDocument({ data:new Uint8Array(e.target.result) }).promise
+        .then(function(doc){
+          pdf = doc; total = doc.numPages;
+          setProgress(0, total, "Found " + total + " pages. Creating the book\u2026");
+          return db.from("protocol_sets").insert({
+            org_id: orgId, name: name, version: version,
+            page_count: total, is_published: false
+          }).select().single();
+        })
+        .then(function(r){
+          if(r.error) throw r.error;
+          setId = r.data.id;
+          return runPages();
+        })
+        .then(function(){
+          setProgress(total, total, "Done. " + total + " pages ready.");
+          go.disabled = false;
+          toast("Uploaded " + name);
+          renderProtocols();
+        })
+        .catch(function(err){ stop(err && err.message ? err.message : "Something went wrong."); });
+    };
+    reader.readAsArrayBuffer(file);
+
+    function stop(msg){
+      go.disabled = false;
+      $("pr_err").innerHTML = '<div class="err" style="margin-top:12px">'+esc(msg)+'</div>';
+      setProgress(0, 1, "Stopped.");
+    }
+
+    function runPages(){
+      var n = 0;
+      function next(){
+        n++;
+        if(n > total) return Promise.resolve();
+        setProgress(n-1, total, "Page " + n + " of " + total + "\u2026");
+        return onePage(n).then(next);
+      }
+      return next();
+    }
+
+    function onePage(n){
+      return pdf.getPage(n).then(function(page){
+        var vp1 = page.getViewport({ scale:1 });
+        var vp = page.getViewport({ scale: PDF_SCALE_WIDTH / vp1.width });
+        var canvas = document.createElement("canvas");
+        canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height);
+        var ctx = canvas.getContext("2d");
+        return page.render({ canvasContext:ctx, viewport:vp }).promise
+          .then(function(){ return page.getTextContent(); })
+          .then(function(tc){
+            var text = tc.items.map(function(i){ return i.str; }).join(" ")
+                         .replace(/\s+/g," ").trim();
+            return new Promise(function(resolve, reject){
+              canvas.toBlob(function(blob){
+                if(!blob) return reject(new Error("Could not turn page " + n + " into an image."));
+                var path = orgId + "/protocols/" + setId + "/p"
+                         + String(n).padStart(4,"0") + ".jpg";
+                db.storage.from("org-media").upload(path, blob, {
+                  contentType:"image/jpeg", upsert:true
+                }).then(function(up){
+                  if(up.error) return reject(new Error("Upload blocked on page " + n + ": " + up.error.message));
+                  return db.from("protocol_pages").insert({
+                    org_id: orgId, set_id: setId, page_number: n,
+                    image_path: path, body_text: text
+                  });
+                }).then(function(ins){
+                  if(ins && ins.error) return reject(ins.error);
+                  canvas.width = canvas.height = 0;
+                  resolve();
+                }).catch(reject);
+              }, "image/jpeg", PDF_QUALITY);
+            });
+          });
+      });
+    }
+  }
+
+
+  /* ================= IMAGES ================= */
+
+  var MEDIA_KINDS = [
+    { key:"apartments", label:"Apartment maps",
+      hint:"One image per complex. The file name becomes the complex name unless it already exists." },
+    { key:"cabinets", label:"Cabinet photos", hint:"The photos behind the equipment finder." },
+    { key:"tile-icons", label:"Home screen icons", hint:"Matched to tiles by file name." },
+    { key:"media", label:"Anything else", hint:"" }
+  ];
+  var MEDIA_QUEUE = null;
+
+  function renderMedia(){
+    var el = $("tab-media");
+    el.innerHTML =
+      '<div class="card"><h2>Upload images</h2>'
+      + '<p class="hint">Select many files at once. Nothing is overwritten unless the file name '
+      + 'matches something already there.</p>'
+      + '<div class="grid2">'
+      +   '<div class="f"><label>What are these?</label><select id="md_kind">'
+      +     MEDIA_KINDS.map(function(k){
+              return '<option value="'+k.key+'">'+esc(k.label)+'</option>'; }).join("")
+      +   '</select></div>'
+      +   '<div class="f"><label>Files</label><input id="md_files" type="file" multiple accept="image/*"></div>'
+      + '</div>'
+      + '<p class="hint" id="md_hint">'+esc(MEDIA_KINDS[0].hint)+'</p>'
+      + '<button id="md_go" class="btn primary hidden">Upload</button>'
+      + '<div id="md_progress" class="hidden" style="margin-top:14px">'
+      +   '<div class="bar-outer"><div id="md_bar" class="bar-inner"></div></div>'
+      +   '<div id="md_status" class="mono">\u2014</div></div>'
+      + '<div id="md_out" style="margin-top:12px"></div></div>'
+      + '<div class="card"><h2>Already uploaded</h2><div id="md_list">'
+      + '<div class="empty">Loading\u2026</div></div></div>';
+    wireMedia();
+    listMedia();
+  }
+
+  function wireMedia(){
+    var kind = $("md_kind"), files = $("md_files");
+    if(!kind) return;
+    kind.addEventListener("change", function(){
+      for(var i=0;i<MEDIA_KINDS.length;i++){
+        if(MEDIA_KINDS[i].key === kind.value) $("md_hint").textContent = MEDIA_KINDS[i].hint;
+      }
+      listMedia();
+    });
+    files.addEventListener("change", function(e){
+      MEDIA_QUEUE = Array.prototype.slice.call(e.target.files || []);
+      var go = $("md_go");
+      if(!MEDIA_QUEUE.length){ go.classList.add("hidden"); return; }
+      var mb = MEDIA_QUEUE.reduce(function(a,f){ return a + f.size; }, 0) / 1048576;
+      $("md_out").innerHTML = '<div class="warn">'+MEDIA_QUEUE.length+' files, '
+        + mb.toFixed(1) + ' MB in total.</div>';
+      go.classList.remove("hidden");
+      go.textContent = "Upload " + MEDIA_QUEUE.length + " images";
+    });
+  }
+
+  function mediaPath(kind, name){
+    return orgId + "/" + kind + "/" + String(name).toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+  }
+  function publicUrl(path){
+    var r = db.storage.from("org-branding").getPublicUrl(path);
+    return (r && r.data && r.data.publicUrl) || "";
+  }
+
+  function uploadMedia(){
+    if(!MEDIA_QUEUE || !MEDIA_QUEUE.length) return;
+    var kind = $("md_kind").value;
+    var go = $("md_go"); go.disabled = true;
+    $("md_progress").classList.remove("hidden");
+    var done = 0, failed = [], total = MEDIA_QUEUE.length;
+
+    function step(i){
+      if(i >= total){
+        go.disabled = false;
+        $("md_status").textContent = failed.length
+          ? (done + " uploaded, " + failed.length + " failed") : (done + " uploaded");
+        $("md_out").innerHTML = failed.length
+          ? '<div class="err">These did not upload:<br>' + failed.map(esc).join("<br>") + '</div>'
+          : '<div class="warn">All ' + done + ' uploaded.</div>';
+        MEDIA_QUEUE = null;
+        $("md_files").value = "";
+        if(kind === "apartments") linkApartments();
+        else if(kind === "tile-icons") linkTileIcons();
+        listMedia();
+        return;
+      }
+      var f = MEDIA_QUEUE[i];
+      $("md_bar").style.width = Math.round(i/total*100) + "%";
+      $("md_status").textContent = (i+1) + " of " + total + " \u00B7 " + f.name;
+      db.storage.from("org-branding")
+        .upload(mediaPath(kind, f.name), f, { upsert:true, contentType:f.type || "image/jpeg" })
+        .then(function(r){
+          if(r.error) failed.push(f.name + " (" + r.error.message + ")"); else done++;
+          step(i+1);
+        })
+        .catch(function(){ failed.push(f.name); step(i+1); });
+    }
+    step(0);
+  }
+
+  function linkApartments(){
+    db.storage.from("org-branding").list(orgId + "/apartments", { limit: 500 })
+      .then(function(r){
+        var files = (r.data || []).filter(function(f){ return f.name; });
+        if(!files.length) return;
+        return db.from("complexes").select("id,name,map_path").eq("org_id", orgId)
+          .then(function(ex){
+            var have = {};
+            (ex.data || []).forEach(function(c){
+              have[String(c.map_path||"").split("/").pop()] = c;
+            });
+            var add = [];
+            files.forEach(function(f){
+              if(have[f.name]) return;
+              var stem = f.name.replace(/\.[a-z0-9]+$/i, "");
+              add.push({ org_id: orgId,
+                name: stem.replace(/[-_]+/g," ").replace(/\b\w/g, function(c){ return c.toUpperCase(); }),
+                map_path: publicUrl(orgId + "/apartments/" + f.name),
+                is_active: true, sort_order: 500 });
+            });
+            if(!add.length) return;
+            return db.from("complexes").insert(add).then(function(){
+              toast("Created " + add.length + " apartment complexes");
+            });
+          });
+      }).catch(function(){});
+  }
+
+  function linkTileIcons(){
+    db.storage.from("org-branding").list(orgId + "/tile-icons", { limit: 200 })
+      .then(function(r){
+        var files = (r.data || []).filter(function(f){ return f.name; });
+        if(!files.length) return;
+        return db.from("tiles").select("id,label,image_path").eq("org_id", orgId)
+          .then(function(t){
+            var jobs = [];
+            (t.data || []).forEach(function(tile){
+              var want = String(tile.image_path || "").split("/").pop().toLowerCase()
+                           .replace(/[^a-z0-9._-]+/g, "-");
+              if(!want) return;
+              for(var i=0;i<files.length;i++){
+                if(files[i].name.toLowerCase() === want){
+                  jobs.push(db.from("tiles")
+                    .update({ image_path: publicUrl(orgId + "/tile-icons/" + files[i].name) })
+                    .eq("id", tile.id));
+                  break;
+                }
+              }
+            });
+            if(jobs.length) return Promise.all(jobs).then(function(){
+              toast("Linked " + jobs.length + " tile icons");
+            });
+          });
+      }).catch(function(){});
+  }
+
+  function listMedia(){
+    var kind = $("md_kind") ? $("md_kind").value : "apartments";
+    var box = $("md_list");
+    if(!box) return;
+    box.innerHTML = '<div class="empty">Loading\u2026</div>';
+    db.storage.from("org-branding").list(orgId + "/" + kind, { limit: 500 })
+      .then(function(r){
+        var files = (r.data || []).filter(function(f){ return f.name; });
+        if(!files.length){ box.innerHTML = '<div class="empty">Nothing uploaded here yet.</div>'; return; }
+        box.innerHTML = '<p class="hint">'+files.length+' files.</p>'
+          + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:9px">'
+          + files.slice(0, 120).map(function(f){
+              var u = publicUrl(orgId + "/" + kind + "/" + f.name);
+              return '<div style="border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff">'
+                + '<img src="'+esc(u)+'" alt="" style="width:100%;height:80px;object-fit:cover;display:block">'
+                + '<div class="small" style="padding:5px 7px;word-break:break-all">'+esc(f.name)+'</div></div>';
+            }).join("")
+          + '</div>' + (files.length > 120 ? '<p class="hint">Showing the first 120.</p>' : '');
+      }).catch(function(e){
+        box.innerHTML = '<div class="err">'+esc(e.message||"Could not list files")+'</div>';
+      });
+  }
+
+
+  /* ================= CONTENT ================= */
+
+  var CONTENT_SETS = {
+    directory: {
+      table: "directory_entries", label: "Directory",
+      hint: "Everyone in the org, including people who are not responders. Dates of birth and addresses stay hidden from ordinary members unless you allow them under Organization.",
+      order: "sort_order",
+      cols: [
+        { f:"sort_order",    l:"#",      w:"56px", num:true },
+        { f:"entry_type",    l:"Type",   w:"110px" },
+        { f:"first_name",    l:"First" },
+        { f:"last_name",     l:"Last" },
+        { f:"unit_number",   l:"Unit",   w:"80px" },
+        { f:"phone",         l:"Phone",  w:"130px" },
+        { f:"level",         l:"Level",  w:"80px" },
+        { f:"address",       l:"Address" },
+        { f:"date_of_birth", l:"DOB",    w:"120px" },
+        { f:"is_active",     l:"Active", w:"60px", bool:true }
+      ],
+      blank: { entry_type:"Responder", is_active:true, sort_order:999 }
+    },
+    complexes: {
+      table: "complexes", label: "Apartment complexes",
+      hint: "The building pins themselves are placed on the map in the member app, not here.",
+      order: "sort_order",
+      cols: [
+        { f:"sort_order", l:"#",         w:"56px", num:true },
+        { f:"name",       l:"Name" },
+        { f:"address",    l:"Address" },
+        { f:"map_path",   l:"Map image" },
+        { f:"gate_code",  l:"Gate code", w:"110px" },
+        { f:"is_active",  l:"Active",    w:"60px", bool:true }
+      ],
+      blank: { is_active:true, sort_order:999 }
+    },
+    vitals: {
+      table: "vitals_reference", label: "Vitals reference",
+      hint: "The adult and paediatric checklists.",
+      order: "sort_order",
+      cols: [
+        { f:"sort_order", l:"#",       w:"56px", num:true },
+        { f:"tab",        l:"Tab",     w:"110px" },
+        { f:"section",    l:"Section", w:"150px" },
+        { f:"item",       l:"Item" },
+        { f:"value1",     l:"Value" },
+        { f:"value2",     l:"Value 2" },
+        { f:"value3",     l:"Value 3" },
+        { f:"is_active",  l:"On",      w:"56px", bool:true }
+      ],
+      blank: { tab:"Adult", is_active:true, sort_order:999 }
+    },
+    cpr: {
+      table: "cpr_buttons", label: "CPR buttons",
+      hint: "The buttons a responder taps during a code, in order. Action tells the app what to count: Start, log, shock, epi, rhythm, rosc.",
+      order: "sort_order",
+      cols: [
+        { f:"sort_order", l:"#",      w:"56px", num:true },
+        { f:"label",      l:"Button" },
+        { f:"action",     l:"Action", w:"110px" },
+        { f:"color",      l:"Colour", w:"100px" },
+        { f:"is_active",  l:"On",     w:"56px", bool:true }
+      ],
+      blank: { action:"log", is_active:true, sort_order:999 }
+    },
+    badges: {
+      table: "badge_types", label: "Badges",
+      hint: "The hats a person can wear: Responder, Dispatcher, Supervisor, Doctor and any you add.",
+      order: "sort_order",
+      cols: [
+        { f:"sort_order", l:"#",      w:"56px", num:true },
+        { f:"name",       l:"Badge" },
+        { f:"color",      l:"Colour", w:"110px" },
+        { f:"is_active",  l:"On",     w:"56px", bool:true }
+      ],
+      blank: { is_active:true, sort_order:999 }
+    },
+    uploads: {
+      table: "upload_types", label: "Document types",
+      hint: "What a member can send in from the file uploader.",
+      order: "sort_order",
+      cols: [
+        { f:"sort_order", l:"#",  w:"56px", num:true },
+        { f:"name",       l:"Document type" },
+        { f:"is_active",  l:"On", w:"56px", bool:true }
+      ],
+      blank: { is_active:true, sort_order:999 }
+    }
+  };
+
+  var CONTENT_SET = "directory";
+
+  function renderContent(){
+    var el = $("tab-content");
+    var set = CONTENT_SETS[CONTENT_SET];
+    var picker = '<div class="card"><div class="row">'
+      + Object.keys(CONTENT_SETS).map(function(k){
+          return '<button class="btn js-cset'+(k===CONTENT_SET?" primary":"")+'" data-k="'+k+'">'
+            + esc(CONTENT_SETS[k].label) + '</button>';
+        }).join("") + '</div></div>';
+
+    el.innerHTML = picker + '<div class="card"><div class="empty">Loading\u2026</div></div>';
+
+    db.from(set.table).select("*").eq("org_id", orgId).order(set.order)
+      .then(function(r){
+        if(r.error) throw r.error;
+        var rows = r.data || [];
+        var html = picker + '<div class="card"><h2>'+esc(set.label)+'</h2>'
+          + '<p class="hint">'+esc(set.hint)+'</p>'
+          + '<p class="hint">'+rows.length+' entries. Change a box and click out to save.</p>'
+          + '<div class="row" style="margin-bottom:12px">'
+          + '<button id="ct_add" class="btn primary">Add a row</button></div>';
+
+        if(!rows.length){
+          html += '<div class="empty">Nothing here yet.</div></div>';
+          el.innerHTML = html; wireContent(); return;
+        }
+
+        html += '<div class="scroller"><table><thead><tr>'
+          + set.cols.map(function(c){
+              return '<th'+(c.w?' style="width:'+c.w+'"':'')+'>'+esc(c.l)+'</th>'; }).join("")
+          + '<th></th></tr></thead><tbody>';
+
+        rows.forEach(function(row){
+          html += '<tr>' + set.cols.map(function(c){
+            if(c.bool){
+              return '<td style="text-align:center"><input type="checkbox" class="js-cbool" '
+                + 'data-id="'+row.id+'" data-f="'+c.f+'" '+(row[c.f]?"checked":"")+'></td>';
+            }
+            return '<td><input class="js-cin" data-id="'+row.id+'" data-f="'+c.f+'" '
+              + 'value="'+esc(row[c.f]==null?"":row[c.f])+'"'+(c.num?' inputmode="decimal"':'')+'></td>';
+          }).join("")
+          + '<td class="actions"><button class="xbtn js-cdel" data-id="'+row.id+'" '
+          + 'title="Delete">\u00D7</button></td></tr>';
+        });
+        html += '</tbody></table></div></div>';
+        el.innerHTML = html;
+        wireContent();
+      }).catch(function(e){
+        el.innerHTML = picker + '<div class="card"><div class="err">'
+          + esc(e.message||"Could not load") + '</div></div>';
+      });
+  }
+
+  function wireContent(){
+    Array.prototype.forEach.call(document.querySelectorAll(".js-cset"), function(b){
+      b.addEventListener("click", function(){
+        CONTENT_SET = b.getAttribute("data-k");
+        renderContent();
+      });
+    });
+    var add = $("ct_add");
+    if(add) add.addEventListener("click", function(){
+      var set = CONTENT_SETS[CONTENT_SET];
+      var row = { org_id: orgId };
+      for(var k in set.blank) row[k] = set.blank[k];
+      add.disabled = true;
+      db.from(set.table).insert(row).then(function(r){
+        add.disabled = false;
+        if(r.error) return oops(r.error);
+        renderContent();
+      }).catch(function(e){ add.disabled = false; oops(e); });
     });
   }
 
